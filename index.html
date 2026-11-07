@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="fr" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gabriel Dunogue — Développeur back-end</title>
+    <meta name="description" content="Portfolio de Gabriel Dunogue, développeur back-end. Une carte à explorer." />
+    <meta name="theme-color" content="#0c0d0f" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230c0d0f'/%3E%3Cpath d='M16 5v22M5 16h22' stroke='%23ff5b22' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='6' fill='none' stroke='%23ecebe6' stroke-width='2'/%3E%3C/svg%3E"
+    />
+    <script>
+      try {
+        var t = localStorage.getItem('theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <noscript>Ce portfolio est une carte interactive : JavaScript est nécessaire pour l'explorer.</noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
