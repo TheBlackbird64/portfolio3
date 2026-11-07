@@ -72,6 +72,14 @@ export class LoadBalancerSim {
   private last = 0;
 
   private stats: Record<string, HTMLElement> = {};
+  private accent = '';
+
+  /** Theme palette, with the accent of the section the simulation lives in. */
+  private pal() {
+    const P = getPalette();
+    if (!this.accent) this.accent = getComputedStyle(this.root).getPropertyValue('--accent').trim() || P.accent;
+    return { ...P, accent: this.accent, accentSoft: this.accent };
+  }
 
   constructor(private root: HTMLElement) {
     this.canvas = root.querySelector('.sim__canvas')!;
@@ -367,7 +375,7 @@ export class LoadBalancerSim {
 
   private render() {
     const { ctx, w, h, dpr } = this;
-    const P = getPalette();
+    const P = this.pal();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     ctx.lineWidth = 1;
@@ -442,6 +450,7 @@ export class LoadBalancerSim {
         ctx.rect(r.x, r.y, r.w, r.h);
         ctx.clip();
         ctx.strokeStyle = P.accentSoft;
+        ctx.globalAlpha = 0.3;
         ctx.beginPath();
         for (let k = -r.h; k < r.w; k += 6) {
           ctx.moveTo(r.x + k, r.y + r.h);
@@ -524,7 +533,7 @@ export class LoadBalancerSim {
     const { sctx, spark, dpr } = this;
     const w = spark.width / dpr;
     const h = spark.height / dpr;
-    const P = getPalette();
+    const P = this.pal();
     sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     sctx.clearRect(0, 0, w, h);
     const d = this.sparkData;
@@ -565,6 +574,7 @@ export class LoadBalancerSim {
   }
 
   redraw() {
+    this.accent = '';
     this.render();
   }
 }

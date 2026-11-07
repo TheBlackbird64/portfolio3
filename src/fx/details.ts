@@ -21,7 +21,7 @@ export class NameProximity {
       if (rects && py !== null && px !== null) {
         const r = rects[i];
         const d = Math.hypot(r.left + r.width / 2 - px, r.top + r.height / 2 - py);
-        const t = Math.max(0, 1 - d / 300);
+        const t = Math.max(0, 1 - d / 260);
         f = t * t * (3 - 2 * t);
       }
       const c = this.cur[i];
@@ -31,8 +31,8 @@ export class NameProximity {
         moving = true;
         c.s = ns;
         c.w = nw;
-        ch.style.fontStretch = `${(100 + 25 * ns).toFixed(1)}%`;
-        ch.style.fontWeight = `${Math.round(620 + 280 * nw)}`;
+        ch.style.fontStretch = `${(100 + 22 * ns).toFixed(1)}%`;
+        ch.style.fontWeight = `${Math.round(640 + 240 * nw)}`;
       }
     });
     return moving;
@@ -42,13 +42,13 @@ export class NameProximity {
 /* ------------------------------------------------------------------- clock */
 
 export function startClock(els: HTMLElement[], city: string, timeZone: string) {
-  const f = new Intl.DateTimeFormat('fr-FR', { timeZone, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const f = new Intl.DateTimeFormat('fr-FR', { timeZone, hour: '2-digit', minute: '2-digit' });
   const tick = () => {
     const t = `${city} — ${f.format(new Date())}`;
-    for (const el of els) el.textContent = t;
+    for (const el of els) if (el.textContent !== t) el.textContent = t;
   };
   tick();
-  window.setInterval(tick, 1000);
+  window.setInterval(tick, 10_000);
 }
 
 /* -------------------------------------------------------------- log stream */

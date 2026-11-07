@@ -1,30 +1,74 @@
 import type { Geometry } from '../core/geometry';
 import { FONT_MONO, getPalette } from '../core/theme';
-import { fmtBearing, fmtInt, pad, smoothstep, type Cam, type Vec } from '../core/util';
-import { ContourField } from './contours';
+import { clamp, pad, smoothstep, type Cam } from '../core/util';
+import type { Hue, SheetDef } from '../sheets/registry';
 
-export interface SheetView {
-  id: string;
-  num: number;
-  title: string;
-  /** 1 = unexplored hatch fully visible, 0 = explored. */
-  hatch: number;
+/*
+ * Abstract background: slowly drifting rectangles, gathered in two opposite
+ * corners of every sheet (in that sheet's colour), plus a sparse field in between.
+ * Every shape lives at its own depth, so camera moves produce parallax.
+ */
+
+const enum Kind {
+  Stroke,
+  Fill,
+  Solid,
+  Gradient,
+  Dots,
+  Glow,
+}
+
+interface Deco {
+  /** Sheet the shape belongs to (coordinates are relative to its anchor), or null for absolute world coordinates. */
+  home: string | null;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Depth: < 1 behind (slower), > 1 in front (faster). */
+  d: number;
+  kind: Kind;
+  hue: Hue | null;
+  alpha: number;
+  ax: number;
+  ay: number;
+  phase: number;
+  speed: number;
+  /** Direction pointing away from the cluster corner (for gradients). */
+  ix: number;
+  iy: number;
 }
 
 export interface DrawState {
   cam: Cam;
   geo: Geometry;
-  sheets: SheetView[];
-  currentId: string;
+  sheets: SheetDef[];
   overview: boolean;
   hoverId: string | null;
-  visitedRoutes: Set<string>;
-  trail: { from: Vec; alpha: number } | null;
-  /** Terrain parallax strength (0 when reduced motion). */
-  parallax: number;
+  time: number;
+  /** 0 when reduced motion is requested. */
+  motion: number;
 }
 
-const PARALLAX = 0.72;
+function rng(seed: number) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const snap8 = (v: number) => Math.round(v / 8) * 8;
+
+function rgba(color: string, a: number) {
+  const m = color.match(/^#([0-9a-f]{6})$/i);
+  if (!m) return color;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
 
 export class Background {
   readonly canvas = document.createElement('canvas');
@@ -32,11 +76,9 @@ export class Background {
   private dpr = 1;
   private w = 1;
   private h = 1;
-  private contours = new ContourField();
+  private decos: Deco[] = [];
   /** Global fade used by the intro. */
   intro = 0;
-  /** Set when some tiles could not be computed this frame. */
-  pending = false;
 
   constructor() {
     this.canvas.className = 'bg-canvas';
@@ -53,287 +95,257 @@ export class Background {
     this.canvas.style.height = `${h}px`;
   }
 
-  /** Pre-compute every terrain tile visible from a given camera (used before the intro). */
-  warm(cam: Cam, parallax: number) {
-    const budget = { left: 400 };
-    this.forEachTile(cam, parallax, (tx, ty) => this.contours.get(tx, ty, budget));
+  /* ------------------------------------------------------------ composition */
+
+  build(geo: Geometry, sheets: SheetDef[]) {
+    const out: Deco[] = [];
+    const { sw, sh } = geo;
+    const s = clamp(Math.min(sw / 1440, sh / 900), 0.5, 1.25);
+
+    for (const def of sheets) {
+      const g = geo.get(def.id);
+      const rnd = rng(9173 + def.num * 7919);
+      const top = -sh / 2;
+      const bottom = g.maxScroll + sh / 2;
+      // alternate the diagonal from one sheet to the next
+      const corners: [number, number][] =
+        def.num % 2 === 0
+          ? [
+              [sw / 2, top],
+              [-sw / 2, bottom],
+            ]
+          : [
+              [-sw / 2, top],
+              [sw / 2, bottom],
+            ];
+      const band = { x: geo.margin, top: geo.insetTop, bottom: geo.insetBottom };
+      for (const [cx, cy] of corners) this.cluster(out, def, cx, cy, -Math.sign(cx), cy < 0 ? 1 : -1, rnd, s, geo.compact, band);
+
+      // tall sheets: a few small shapes in the side margins, so scrolling has depth too
+      const steps = Math.floor(g.maxScroll / (sh * 0.8));
+      for (let k = 1; k <= steps; k++) {
+        const side = k % 2 ? 1 : -1;
+        const y = top + k * sh * 0.8 + (rnd() - 0.5) * 160;
+        const x = side * (sw / 2 - geo.margin * (0.3 + rnd() * 0.3));
+        const base = { home: def.id, ax: 4 + rnd() * 6, ay: 6 + rnd() * 8, phase: rnd() * 6.28, speed: 0.25 + rnd() * 0.3, ix: -side, iy: 1 };
+        const sz = snap8(14 + rnd() * 18) || 8;
+        out.push({ ...base, x: x - sz / 2, y, w: sz, h: sz, d: 1.25 + rnd() * 0.15, kind: Kind.Stroke, hue: null, alpha: 0.3 });
+        out.push({ ...base, x: x + side * -18, y: y + sz + 14, w: 5, h: 5, d: 1.38, kind: Kind.Solid, hue: def.hue, alpha: 0.9 });
+        if (rnd() < 0.5) out.push({ ...base, x: x + side * 10, y: y - 120, w: 1, h: snap8(60 + rnd() * 100), d: 1.12, kind: Kind.Fill, hue: null, alpha: 0.22 });
+      }
+    }
+
+    // sparse field between sheets
+    const rnd = rng(424242);
+    const b = geo.bounds;
+    const cell = 560;
+    for (let x = b.x - 1400; x < b.x + b.w + 1400; x += cell)
+      for (let y = b.y - 1000; y < b.y + b.h + 1000; y += cell) {
+        if (rnd() > 0.6) continue;
+        const px = x + rnd() * cell;
+        const py = y + rnd() * cell;
+        if (geo.hit(px, py, 80)) continue;
+        const r = rnd();
+        const base = { home: null, x: px, y: py, d: 0.55 + rnd() * 0.9, ax: 4 + rnd() * 10, ay: 4 + rnd() * 10, phase: rnd() * 6.28, speed: 0.15 + rnd() * 0.3, ix: 1, iy: 1, hue: null };
+        if (r < 0.5) out.push({ ...base, w: 4, h: 4, kind: Kind.Solid, alpha: 0.32 });
+        else if (r < 0.85) {
+          const sz = 10 + rnd() * 18;
+          out.push({ ...base, w: sz, h: sz, kind: Kind.Stroke, alpha: 0.16 });
+        } else out.push({ ...base, w: 40 + rnd() * 90, h: 1, kind: Kind.Fill, alpha: 0.16 });
+      }
+
+    // draw far shapes first
+    this.decos = out.sort((a, b) => a.d - b.d);
   }
 
-  private forEachTile(cam: Cam, parallax: number, fn: (tx: number, ty: number) => void) {
-    const zc = Math.pow(cam.z, 0.55);
-    const P = PARALLAX * parallax + (1 - parallax);
-    const T = this.contours.tile;
-    const cx0 = cam.x * P - this.w / 2 / zc;
-    const cx1 = cam.x * P + this.w / 2 / zc;
-    const cy0 = cam.y * P - this.h / 2 / zc;
-    const cy1 = cam.y * P + this.h / 2 / zc;
-    for (let ty = Math.floor(cy0 / T); ty <= Math.floor(cy1 / T); ty++)
-      for (let tx = Math.floor(cx0 / T); tx <= Math.floor(cx1 / T); tx++) fn(tx, ty);
+  private cluster(
+    out: Deco[],
+    def: SheetDef,
+    cx: number,
+    cy: number,
+    ix: number,
+    iy: number,
+    rnd: () => number,
+    s: number,
+    compact: boolean,
+    band: { x: number; top: number; bottom: number },
+  ) {
+    const R = (a: number, b: number) => a + (b - a) * rnd();
+    const k = compact ? 0.6 : 1;
+    const bandY = iy > 0 ? band.top : band.bottom;
+    /**
+     * px, py: distance of the rect's near corner from the cluster corner, measured inward.
+     * `edge` shapes are kept inside the margins so they never sit on top of the text.
+     */
+    const add = (px: number, py: number, w: number, h: number, d: number, kind: Kind, hue: Hue | null, alpha: number, drift = 1, edge = false) => {
+      const W = Math.max(1, snap8(w * s * k) || w);
+      const H = Math.max(1, snap8(h * s * k) || h);
+      let qx = px * s * k;
+      let qy = py * s * k;
+      if (edge && qx + W > band.x - 6 && qy + H > bandY - 6) {
+        if (rnd() < 0.5) qx = R(-W * 0.3, Math.max(0, band.x - W - 10));
+        else qy = R(-H * 0.3, Math.max(0, bandY - H - 10));
+      }
+      const nx = cx + ix * qx;
+      const ny = cy + iy * qy;
+      out.push({
+        home: def.id,
+        x: ix > 0 ? snap8(nx) : snap8(nx) - W,
+        y: iy > 0 ? snap8(ny) : snap8(ny) - H,
+        w: W,
+        h: H,
+        d,
+        kind,
+        hue,
+        alpha,
+        ax: R(2, 7) * drift,
+        ay: R(3, 9) * drift,
+        phase: R(0, 6.28),
+        speed: R(0.18, 0.42),
+        ix,
+        iy,
+      });
+    };
+
+    out.push({ home: def.id, x: cx, y: cy, w: R(340, 480) * s * k, h: 0, d: 0.7, kind: Kind.Glow, hue: def.hue, alpha: 0.11, ax: 6, ay: 6, phase: R(0, 6.28), speed: 0.12, ix, iy });
+    // soft, large pieces may run under the content
+    add(R(-90, -20), R(-110, -30), R(240, 360), R(260, 400), 0.78, Kind.Gradient, def.hue, R(0.18, 0.24), 0.6);
+    add(R(20, 70), R(30, 90), R(150, 240), R(110, 190), 0.88, Kind.Stroke, null, 0.12, 0.8);
+    add(R(-30, 30), R(120, 200), R(70, 140), R(50, 90), 0.95, Kind.Fill, def.hue, 0.1);
+    // crisp pieces stay in the margins
+    add(R(120, 260), R(10, 60), R(60, 110), R(40, 70), 1.0, Kind.Stroke, def.hue, 0.5, 1, true);
+    add(R(10, 50), R(150, 240), 64, 40, 1.06, Kind.Dots, null, 0.4, 1, true);
+    const sq = R(16, 34);
+    add(R(30, 160), R(30, 160), sq, sq, 1.18, Kind.Solid, def.hue, 0.95, 1, true);
+    for (let i = 0; i < 3; i++) {
+      const sz = R(10, 22);
+      add(R(20, 280), R(20, 280), sz, sz, R(1.1, 1.3), Kind.Stroke, null, 0.3, 1.4, true);
+    }
+    for (let i = 0; i < 3; i++) add(R(20, 300), R(20, 300), 5, 5, R(1.15, 1.4), Kind.Solid, rnd() < 0.5 ? def.hue : null, 0.85, 1.6, true);
   }
 
-  draw(s: DrawState) {
+  /* ----------------------------------------------------------------- draw */
+
+  draw(st: DrawState) {
     const { ctx, w, h, dpr } = this;
     const P = getPalette();
-    const { cam, geo } = s;
+    const { cam, geo } = st;
     const z = cam.z;
-    const ox = w / 2 - cam.x * z;
-    const oy = h / 2 - cam.y * z;
-    const lw = Math.max(1, Math.round(dpr)) / dpr;
-    const snap = (v: number) => (Math.round(v * dpr) + 0.5) / dpr;
-
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
-    ctx.globalAlpha = this.intro;
-    this.pending = false;
 
-    // Frames in screen space
-    const frames = s.sheets.map((sv) => {
-      const f = geo.get(sv.id).frame;
-      const r = { sv, x: f.x * z + ox, y: f.y * z + oy, w: f.w * z, h: f.h * z };
-      return { ...r, visible: r.x < w + 60 && r.x + r.w > -60 && r.y < h + 60 && r.y + r.h > -60 };
-    });
+    const pf = smoothstep(0.22, 0.75, z) * st.motion;
+    const t = st.time * st.motion;
+    const fade = this.intro * (st.overview ? 0.55 : 1);
+    const anchors = new Map<string, { x: number; y: number }>();
+    for (const [id, g] of geo.map) anchors.set(id, g.anchor);
 
-    // 1 — paper
-    ctx.fillStyle = P.paper;
-    for (const f of frames) if (f.visible) ctx.fillRect(f.x, f.y, f.w, f.h);
-
-    // 2 — unexplored hatch
-    for (const f of frames) {
-      if (!f.visible || f.sv.hatch <= 0.01) continue;
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(f.x, f.y, f.w, f.h);
-      ctx.clip();
-      ctx.globalAlpha = this.intro * f.sv.hatch;
-      ctx.strokeStyle = P.hatch;
-      ctx.lineWidth = lw;
-      ctx.beginPath();
-      const step = 9;
-      const x0 = Math.max(f.x, 0);
-      const x1 = Math.min(f.x + f.w, w);
-      const y0 = Math.max(f.y, 0);
-      const y1 = Math.min(f.y + f.h, h);
-      for (let k = x0 - (y1 - y0) - ((x0 + y0) % step); k < x1; k += step) {
-        ctx.moveTo(k, y1);
-        ctx.lineTo(k + (y1 - y0), y0);
+    for (const r of this.decos) {
+      const d = 1 + (r.d - 1) * pf;
+      const zE = Math.pow(z, d);
+      let ox: number;
+      let oy: number;
+      if (r.home) {
+        const A = anchors.get(r.home)!;
+        ox = (A.x - cam.x) * z * d;
+        oy = (A.y - cam.y) * z * d;
+      } else {
+        ox = -cam.x * z * d;
+        oy = -cam.y * z * d;
       }
-      ctx.stroke();
-      ctx.restore();
-    }
-    ctx.globalAlpha = this.intro;
+      const dx = r.ax * Math.sin(t * r.speed + r.phase);
+      const dy = r.ay * Math.cos(t * r.speed * 0.83 + r.phase * 1.7);
+      const x = w / 2 + ox + (r.x + dx) * zE;
+      const y = h / 2 + oy + (r.y + dy) * zE;
+      const color = r.hue ? P.hues[r.hue] : P.deco;
+      const a = r.alpha * (0.8 + 0.2 * Math.sin(t * r.speed * 0.7 + r.phase * 2.3)) * fade;
+      if (a < 0.004) continue;
 
-    // 3 — everything that lives "between" sheets
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, 0, w, h);
-    for (const f of frames) if (f.visible) ctx.rect(f.x, f.y, f.w, f.h);
-    ctx.clip('evenodd');
-
-    this.drawContours(cam, s.parallax, lw);
-    this.drawGrid(z, ox, oy, lw, snap);
-    this.drawRoutes(s, z, ox, oy, lw);
-
-    if (s.trail && s.trail.alpha > 0.01) {
-      ctx.globalAlpha = this.intro * s.trail.alpha;
-      ctx.strokeStyle = P.accent;
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(s.trail.from.x * z + ox, s.trail.from.y * z + oy);
-      ctx.lineTo(w / 2, h / 2);
-      ctx.stroke();
-      ctx.globalAlpha = this.intro;
-    }
-    ctx.restore();
-
-    // 4 — frames, crop marks, labels
-    ctx.font = `500 ${s.overview ? 11 : 10}px ${FONT_MONO}`;
-    ctx.textBaseline = 'alphabetic';
-    const showLabels = s.overview || geo.margin * z >= 26;
-    for (const f of frames) {
-      if (!f.visible) continue;
-      const isCur = f.sv.id === s.currentId;
-      const isHover = f.sv.id === s.hoverId;
-      ctx.lineWidth = lw;
-      ctx.strokeStyle = isHover ? P.accent : isCur && !s.overview ? P.line3 : P.frame;
-      ctx.strokeRect(snap(f.x), snap(f.y), Math.round(f.w), Math.round(f.h));
-      if (isHover) {
-        ctx.fillStyle = P.accentSoft;
-        ctx.fillRect(f.x, f.y, f.w, f.h);
+      if (r.kind === Kind.Glow) {
+        const rad = r.w * zE;
+        if (x + rad < 0 || x - rad > w || y + rad < 0 || y - rad > h) continue;
+        const g = ctx.createRadialGradient(x, y, 0, x, y, rad);
+        g.addColorStop(0, rgba(color, a));
+        g.addColorStop(1, rgba(color, 0));
+        ctx.fillStyle = g;
+        ctx.fillRect(x - rad, y - rad, rad * 2, rad * 2);
+        continue;
       }
 
-      // crop marks
-      const o = 7;
-      const L = 12;
-      ctx.strokeStyle = isHover ? P.accent : P.ink3;
-      ctx.beginPath();
-      const X0 = snap(f.x);
-      const Y0 = snap(f.y);
-      const X1 = snap(f.x + f.w);
-      const Y1 = snap(f.y + f.h);
-      ctx.moveTo(X0 - o - L, Y0); ctx.lineTo(X0 - o, Y0);
-      ctx.moveTo(X0, Y0 - o - L); ctx.lineTo(X0, Y0 - o);
-      ctx.moveTo(X1 + o, Y0); ctx.lineTo(X1 + o + L, Y0);
-      ctx.moveTo(X1, Y0 - o - L); ctx.lineTo(X1, Y0 - o);
-      ctx.moveTo(X0 - o - L, Y1); ctx.lineTo(X0 - o, Y1);
-      ctx.moveTo(X0, Y1 + o); ctx.lineTo(X0, Y1 + o + L);
-      ctx.moveTo(X1 + o, Y1); ctx.lineTo(X1 + o + L, Y1);
-      ctx.moveTo(X1, Y1 + o); ctx.lineTo(X1, Y1 + o + L);
-      ctx.stroke();
+      const rw = Math.max(r.w * zE, r.w === 1 ? 1 : 0.5);
+      const rh = Math.max(r.h * zE, r.h === 1 ? 1 : 0.5);
+      if (x > w || y > h || x + rw < 0 || y + rh < 0) continue;
 
-      if (showLabels && f.y > -20 && f.y < h + 20) {
-        const g = geo.get(f.sv.id);
-        ctx.fillStyle = isHover ? P.accent : isCur ? P.ink2 : P.ink3;
-        ctx.textAlign = 'left';
-        ctx.fillText(`${pad(f.sv.num)} — ${f.sv.title.toUpperCase()}`, f.x, f.y - 12);
-        if (f.w > 260) {
-          ctx.textAlign = 'right';
-          ctx.fillStyle = P.ink4;
-          ctx.fillText(`X ${fmtInt(g.anchor.x)}  Y ${fmtInt(-g.anchor.y)}`, f.x + f.w, f.y - 12);
+      switch (r.kind) {
+        case Kind.Stroke: {
+          ctx.globalAlpha = a;
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1;
+          ctx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5, Math.round(rw), Math.round(rh));
+          break;
+        }
+        case Kind.Fill:
+        case Kind.Solid: {
+          ctx.globalAlpha = a;
+          ctx.fillStyle = color;
+          ctx.fillRect(x, y, rw, rh);
+          break;
+        }
+        case Kind.Gradient: {
+          const sx = r.ix > 0 ? x : x + rw;
+          const sy = r.iy > 0 ? y : y + rh;
+          const g = ctx.createLinearGradient(sx, sy, sx + r.ix * rw, sy + r.iy * rh);
+          g.addColorStop(0, rgba(color, a));
+          g.addColorStop(1, rgba(color, 0));
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = g;
+          ctx.fillRect(x, y, rw, rh);
+          break;
+        }
+        case Kind.Dots: {
+          ctx.globalAlpha = a;
+          ctx.fillStyle = color;
+          const step = 12 * zE;
+          if (step < 3) break;
+          const ds = Math.max(1, 2 * zE);
+          for (let i = 0; i * step <= rw; i++) for (let j = 0; j * step <= rh; j++) ctx.fillRect(x + i * step, y + j * step, ds, ds);
+          break;
         }
       }
     }
     ctx.globalAlpha = 1;
-  }
 
-  private drawContours(cam: Cam, parallax: number, lw: number) {
-    const { ctx, dpr, w, h } = this;
-    const P = getPalette();
-    const zc = Math.pow(cam.z, 0.55);
-    const par = PARALLAX * parallax + (1 - parallax);
-    const fade = smoothstep(0.08, 0.3, cam.z);
-    if (fade <= 0) return;
-    const budget = { left: 6 };
-    const tiles: { minor: Path2D; major: Path2D }[] = [];
-    this.forEachTile(cam, parallax, (tx, ty) => {
-      const t = this.contours.get(tx, ty, budget);
-      if (t) tiles.push(t);
-      else this.pending = true;
-    });
-    ctx.save();
-    ctx.setTransform(dpr * zc, 0, 0, dpr * zc, dpr * (w / 2 - cam.x * par * zc), dpr * (h / 2 - cam.y * par * zc));
-    ctx.lineWidth = lw / zc;
-    ctx.globalAlpha = this.intro * fade;
-    ctx.strokeStyle = P.contour;
-    for (const t of tiles) ctx.stroke(t.minor);
-    ctx.strokeStyle = P.contourMajor;
-    for (const t of tiles) ctx.stroke(t.major);
-    ctx.restore();
-  }
-
-  private drawGrid(z: number, ox: number, oy: number, lw: number, snap: (v: number) => number) {
-    const { ctx, w, h } = this;
-    const P = getPalette();
-
-    // fine lines
-    const fine = [40, 200, 1000].find((s) => s * z >= 9) ?? 1000;
-    const a = smoothstep(9, 24, fine * z);
-    if (a > 0.01) {
-      ctx.globalAlpha = this.intro * a;
-      ctx.strokeStyle = P.grid;
-      ctx.lineWidth = lw;
-      ctx.beginPath();
-      const wx0 = Math.floor(-ox / z / fine) * fine;
-      const wy0 = Math.floor(-oy / z / fine) * fine;
-      for (let x = wx0; x * z + ox < w; x += fine) {
-        const X = snap(x * z + ox);
-        ctx.moveTo(X, 0);
-        ctx.lineTo(X, h);
+    // sheet outlines and names, only once zoomed out enough to need them
+    const ov = 1 - smoothstep(0.32, 0.72, z);
+    if (ov > 0.01) {
+      const ox = w / 2 - cam.x * z;
+      const oy = h / 2 - cam.y * z;
+      ctx.font = `500 11px ${FONT_MONO}`;
+      ctx.textBaseline = 'alphabetic';
+      ctx.textAlign = 'left';
+      for (const def of st.sheets) {
+        const f = geo.get(def.id).frame;
+        const x = Math.round(f.x * z + ox) + 0.5;
+        const y = Math.round(f.y * z + oy) + 0.5;
+        const fw = Math.round(f.w * z);
+        const fh = Math.round(f.h * z);
+        if (x > w || y > h || x + fw < 0 || y + fh < 0) continue;
+        const hover = def.id === st.hoverId;
+        const hue = P.hues[def.hue];
+        ctx.globalAlpha = ov * this.intro;
+        ctx.strokeStyle = hover ? hue : P.line3;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x, y, fw, fh);
+        if (hover) {
+          ctx.fillStyle = rgba(hue, 0.08);
+          ctx.fillRect(x, y, fw, fh);
+        }
+        ctx.fillStyle = hue;
+        ctx.fillRect(x - 0.5, y - 0.5, 6, 6);
+        ctx.fillStyle = hover ? P.ink : P.ink3;
+        ctx.fillText(`${pad(def.num)}  ${def.title.toUpperCase()}`, x, y - 10);
       }
-      for (let y = wy0; y * z + oy < h; y += fine) {
-        const Y = snap(y * z + oy);
-        ctx.moveTo(0, Y);
-        ctx.lineTo(w, Y);
-      }
-      ctx.stroke();
+      ctx.globalAlpha = 1;
     }
-
-    // survey crosses
-    const step = [200, 1000, 5000].find((s) => s * z >= 56) ?? 5000;
-    ctx.globalAlpha = this.intro;
-    ctx.strokeStyle = P.cross;
-    ctx.lineWidth = lw;
-    ctx.beginPath();
-    const arm = 4;
-    const cx0 = Math.floor(-ox / z / step) * step;
-    const cy0 = Math.floor(-oy / z / step) * step;
-    for (let x = cx0; x * z + ox < w + arm; x += step)
-      for (let y = cy0; y * z + oy < h + arm; y += step) {
-        const X = snap(x * z + ox);
-        const Y = snap(y * z + oy);
-        ctx.moveTo(X - arm, Y);
-        ctx.lineTo(X + arm + 1, Y);
-        ctx.moveTo(X, Y - arm);
-        ctx.lineTo(X, Y + arm + 1);
-      }
-    ctx.stroke();
-  }
-
-  private drawRoutes(s: DrawState, z: number, ox: number, oy: number, lw: number) {
-    const { ctx, w, h } = this;
-    const P = getPalette();
-    ctx.font = `500 10px ${FONT_MONO}`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    for (const r of s.geo.routes) {
-      const px = r.p.x * z + ox;
-      const py = r.p.y * z + oy;
-      const qx = r.q.x * z + ox;
-      const qy = r.q.y * z + oy;
-      if (Math.max(px, qx) < -20 || Math.min(px, qx) > w + 20 || Math.max(py, qy) < -20 || Math.min(py, qy) > h + 20) continue;
-
-      const visited = s.visitedRoutes.has(r.key);
-      const len = Math.hypot(qx - px, qy - py);
-      const ux = (qx - px) / len;
-      const uy = (qy - py) / len;
-      const label = `${fmtBearing(r.cap)} · ${fmtInt(r.dist)}`;
-      const tw = ctx.measureText(label).width + 18;
-      const mx = (px + qx) / 2;
-      const my = (py + qy) / 2;
-
-      ctx.strokeStyle = visited ? P.ink3 : P.ink4;
-      ctx.lineWidth = lw;
-      ctx.setLineDash(visited ? [] : [3, 5]);
-      ctx.beginPath();
-      if (len > tw + 30 && z > 0.12) {
-        ctx.moveTo(px, py);
-        ctx.lineTo(mx - (ux * tw) / 2, my - (uy * tw) / 2);
-        ctx.moveTo(mx + (ux * tw) / 2, my + (uy * tw) / 2);
-        ctx.lineTo(qx, qy);
-      } else {
-        ctx.moveTo(px, py);
-        ctx.lineTo(qx, qy);
-      }
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // dimension-line ends: perpendicular tick + architectural slash
-      ctx.beginPath();
-      for (const [ex, ey] of [
-        [px, py],
-        [qx, qy],
-      ]) {
-        ctx.moveTo(ex - uy * 6, ey + ux * 6);
-        ctx.lineTo(ex + uy * 6, ey - ux * 6);
-        const sx = (ux - uy) * 0.7071 * 5;
-        const sy = (uy + ux) * 0.7071 * 5;
-        ctx.moveTo(ex - sx, ey - sy);
-        ctx.lineTo(ex + sx, ey + sy);
-      }
-      ctx.stroke();
-
-      if (len > tw + 30 && z > 0.12) {
-        let ang = Math.atan2(uy, ux);
-        if (ang > Math.PI / 2) ang -= Math.PI;
-        if (ang < -Math.PI / 2) ang += Math.PI;
-        ctx.save();
-        ctx.translate(mx, my);
-        ctx.rotate(ang);
-        ctx.fillStyle = visited ? P.ink2 : P.ink3;
-        ctx.fillText(label, 0, 0.5);
-        ctx.restore();
-      }
-    }
-    ctx.textBaseline = 'alphabetic';
   }
 }

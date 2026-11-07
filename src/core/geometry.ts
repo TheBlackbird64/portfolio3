@@ -1,46 +1,39 @@
 import { SHEETS } from '../sheets/registry';
-import { bearing, clamp, rayExit, rectsOverlap, type Rect, type Vec } from './util';
+import { clamp, rectsOverlap, type Rect, type Vec } from './util';
 
 export interface SheetGeo {
   /** Slot = what the camera frames at rest (one stage, or taller). */
   slot: Rect;
-  /** Visible sheet = slot inset by the margin. */
+  /** Area the sheet content occupies. */
   frame: Rect;
   /** Camera target when arriving (top of the sheet). */
   anchor: Vec;
   maxScroll: number;
 }
 
-export interface Route {
-  key: string;
-  a: string;
-  b: string;
-  /** Visible part of the route, between the two sheets. */
-  p: Vec;
-  q: Vec;
-  dist: number;
-  cap: number;
-}
-
-export const routeKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
-
 /** Lays the sheets out on the canvas. Everything is expressed in stage units so it adapts to any screen. */
 export class Geometry {
   sw = 1;
   sh = 1;
   margin = 40;
+  /** Distance between the stage edges and the content, top and bottom. */
+  insetTop = 40;
+  insetBottom = 40;
   compact = false;
   map = new Map<string, SheetGeo>();
-  routes: Route[] = [];
   bounds: Rect = { x: 0, y: 0, w: 1, h: 1 };
 
-  compute(stage: HTMLElement, els: Map<string, HTMLElement>) {
+  compute(stage: HTMLElement, els: Map<string, HTMLElement>, insets: { top: number; bottom: number }) {
     this.sw = stage.clientWidth;
     this.sh = stage.clientHeight;
     this.compact = this.sw < 760;
-    const m = (this.margin = Math.round(clamp(Math.min(this.sw, this.sh * 1.6) * 0.036, 12, 56)));
+    const m = (this.margin = Math.round(clamp(this.sw * 0.055, 20, 88)));
+    const top = Math.max(m, insets.top + clamp(this.sh * 0.03, 8, 28));
+    const bottom = Math.max(m * 0.8, insets.bottom + 16);
+    this.insetTop = top;
+    this.insetBottom = bottom;
     const fw = this.sw - 2 * m;
-    const fh = this.sh - 2 * m;
+    const fh = this.sh - top - bottom;
 
     // write, then read (single layout pass)
     for (const el of els.values()) {
@@ -57,7 +50,7 @@ export class Geometry {
         x: def.gx * this.sw * spread,
         y: def.gy * this.sh,
         w: this.sw,
-        h: Math.max(this.sh, (heights.get(def.id) ?? fh) + 2 * m),
+        h: Math.max(this.sh, (heights.get(def.id) ?? fh) + top + bottom),
       } as Rect,
     }));
 
@@ -89,7 +82,7 @@ export class Geometry {
     let y1 = -Infinity;
     for (const { id, r } of slots) {
       const slot = { x: r.x - ox, y: r.y - oy, w: r.w, h: r.h };
-      const frame = { x: slot.x + m, y: slot.y + m, w: fw, h: slot.h - 2 * m };
+      const frame = { x: slot.x + m, y: slot.y + top, w: fw, h: slot.h - top - bottom };
       this.map.set(id, {
         slot,
         frame,
@@ -105,38 +98,6 @@ export class Geometry {
       y1 = Math.max(y1, frame.y + frame.h);
     }
     this.bounds = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-    this.computeRoutes();
-  }
-
-  private computeRoutes() {
-    const seen = new Set<string>();
-    this.routes = [];
-    for (const def of SHEETS)
-      for (const other of def.links) {
-        const key = routeKey(def.id, other);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const A = this.map.get(def.id)!;
-        const B = this.map.get(other)!;
-        const dx = B.anchor.x - A.anchor.x;
-        const dy = B.anchor.y - A.anchor.y;
-        const len = Math.hypot(dx, dy);
-        const ux = dx / len;
-        const uy = dy / len;
-        const pad = 18;
-        const tA = rayExit(A.anchor.x, A.anchor.y, ux, uy, A.frame) + pad;
-        const tB = rayExit(B.anchor.x, B.anchor.y, -ux, -uy, B.frame) + pad;
-        if (tA + tB >= len) continue;
-        this.routes.push({
-          key,
-          a: def.id,
-          b: other,
-          p: { x: A.anchor.x + ux * tA, y: A.anchor.y + uy * tA },
-          q: { x: B.anchor.x - ux * tB, y: B.anchor.y - uy * tB },
-          dist: len,
-          cap: bearing(dx, dy),
-        });
-      }
   }
 
   get(id: string) {
@@ -153,7 +114,7 @@ export class Geometry {
   }
 
   /** Zoom that fits the whole map in the stage. */
-  fitZoom(padding = 0.88) {
+  fitZoom(padding = 0.84) {
     return Math.min((this.sw * padding) / this.bounds.w, (this.sh * padding) / this.bounds.h);
   }
 }

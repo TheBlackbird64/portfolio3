@@ -1,6 +1,7 @@
+import type { Hue } from '../sheets/registry';
+
 export interface Palette {
   bg: string;
-  paper: string;
   ink: string;
   ink2: string;
   ink3: string;
@@ -9,13 +10,9 @@ export interface Palette {
   line2: string;
   line3: string;
   accent: string;
-  accentSoft: string;
-  grid: string;
-  cross: string;
-  contour: string;
-  contourMajor: string;
-  frame: string;
-  hatch: string;
+  /** Neutral colour of the background shapes (alpha is applied when drawing). */
+  deco: string;
+  hues: Record<Hue, string>;
 }
 
 let palette: Palette | null = null;
@@ -25,7 +22,6 @@ function read(): Palette {
   const v = (n: string) => s.getPropertyValue(n).trim();
   return {
     bg: v('--bg'),
-    paper: v('--paper'),
     ink: v('--ink'),
     ink2: v('--ink-2'),
     ink3: v('--ink-3'),
@@ -33,14 +29,9 @@ function read(): Palette {
     line: v('--line'),
     line2: v('--line-2'),
     line3: v('--line-3'),
-    accent: v('--accent'),
-    accentSoft: v('--accent-soft'),
-    grid: v('--cv-grid'),
-    cross: v('--cv-cross'),
-    contour: v('--cv-contour'),
-    contourMajor: v('--cv-contour-major'),
-    frame: v('--cv-frame'),
-    hatch: v('--cv-hatch'),
+    accent: v('--orange'),
+    deco: v('--deco'),
+    hues: { orange: v('--orange'), blue: v('--blue'), violet: v('--violet'), red: v('--red') },
   };
 }
 
@@ -53,7 +44,7 @@ export const currentTheme = (): ThemeName =>
 
 export function setTheme(t: ThemeName) {
   document.documentElement.dataset.theme = t;
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', t === 'light' ? '#e9e7e0' : '#0c0d0f');
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', t === 'light' ? '#ecebe6' : '#0a0a0b');
   palette = read();
   try {
     localStorage.setItem('theme', t);

@@ -1,7 +1,10 @@
-# Portfolio — la carte
+# Portfolio
 
 Un portfolio en une seule page où l'on ne change pas de page : la caméra **voyage sur un grand canvas**
-(un « plan » technique) d'une feuille à l'autre.
+d'une section à l'autre. Chaque région du canvas a sa couleur (orange, violet, bleu, rouge) et des
+rectangles abstraits flottent en profondeur dans deux coins opposés de chaque section.
+
+> La première version (thème « plan / cartographie », règles, mini-carte) est conservée sur la branche `v1-carte`.
 
 ## Lancer
 
@@ -17,22 +20,23 @@ Puis ouvrir http://127.0.0.1:5173
 | Quoi | Fichier |
 | --- | --- |
 | Textes, projets, compétences, liens | `src/content.ts` (les projets actuels sont des **placeholders**) |
-| Position des feuilles sur la carte et leurs voisins | `src/sheets/registry.ts` (`gx`/`gy` en largeurs/hauteurs d'écran, `links`) |
+| Position des sections sur le canvas, leur couleur (`hue`) et leurs voisins | `src/sheets/registry.ts` (`gx`/`gy` en largeurs/hauteurs d'écran, `links`) |
 | Couleurs des thèmes sombre / clair | `src/styles/tokens.css` |
+| Composition des rectangles du fond | `src/render/background.ts` (`cluster()`) |
 | Mise en page des feuilles | `src/sheets/templates.ts` + `src/styles/sheets.css` |
 
 ## Organisation du code
 
 - `src/app.ts` — la caméra : trajets (avec léger dézoom), vue d'ensemble, URLs, clavier / molette / tactile
-- `src/core/geometry.ts` — placement des feuilles sur le canvas, calcul des routes
-- `src/render/` — le fond en canvas : grille, courbes de niveau procédurales (parallaxe), routes cotées, hachures des zones inexplorées
-- `src/hud/` — règles graduées, mini-carte, repères de bord, barre d'état
+- `src/core/geometry.ts` — placement des sections sur le canvas
+- `src/core/nav.ts` — la navigation fixe, dont les flèches pointent toujours vers leur section
+- `src/render/background.ts` — le fond : rectangles animés avec parallaxe, contours de la vue d'ensemble
 - `src/sheets/` — gabarits HTML, schémas d'architecture SVG, coloration syntaxique
 - `src/fx/` — animations d'apparition, faux logs en direct, simulateur d'équilibreur de charge
 
 ## Raccourcis
 
-`← ↑ → ↓` aller vers la feuille voisine (ou défiler dans un projet) · `M` vue d'ensemble · `0`–`6` aller à une feuille · `Échap` quitter la carte · `Espace` / `Page ↓` défiler
+`← ↑ → ↓` aller vers la section voisine (ou défiler dans un projet) · `M` vue d'ensemble · `0`–`6` aller à une section · `Échap` quitter la vue d'ensemble · `Espace` / `Page ↓` défiler
 
 ## Mise en ligne
 
