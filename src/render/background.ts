@@ -37,6 +37,40 @@ interface Deco {
   /** Direction pointing away from the cluster corner (for gradients). */
   ix: number;
   iy: number;
+  /**
+   * Far backdrop layer: coordinates are in the layer's own (compressed) space and
+   * the depth is applied as is, so these planes always lag far behind the camera.
+   */
+  deep?: boolean;
+}
+
+/** Global knobs for the far backdrop (rectangle planes and networks). Raise them to make it more visible. */
+const BACKDROP_ALPHA = 2.3;
+const NET_ALPHA = 1;
+/** Depth range of the networks: the nearest ones look bigger, bolder and more colourful. */
+const NET_NEAR = 0.8;
+const NET_FAR = 0.16;
+
+interface NetNode {
+  x: number;
+  y: number;
+  ax: number;
+  ay: number;
+  phase: number;
+  speed: number;
+  /** Drawn as a small hollow square instead of a dot. */
+  hub: boolean;
+}
+
+/** A small graph floating on a backdrop plane: nodes drift, packets travel along the links. */
+interface Net {
+  d: number;
+  /** Nearness, 0 (farthest network) to 1 (nearest). */
+  q: number;
+  hue: Hue | null;
+  nodes: NetNode[];
+  edges: [number, number][];
+  packets: { edge: number; period: number; offset: number }[];
 }
 
 export interface DrawState {
@@ -77,6 +111,7 @@ export class Background {
   private w = 1;
   private h = 1;
   private decos: Deco[] = [];
+  private nets: Net[] = [];
   /** Global fade used by the intro. */
   intro = 0;
 
@@ -146,16 +181,250 @@ export class Background {
         const py = y + rnd() * cell;
         if (geo.hit(px, py, 80)) continue;
         const r = rnd();
-        const base = { home: null, x: px, y: py, d: 0.55 + rnd() * 0.9, ax: 4 + rnd() * 10, ay: 4 + rnd() * 10, phase: rnd() * 6.28, speed: 0.15 + rnd() * 0.3, ix: 1, iy: 1, hue: null };
-        if (r < 0.5) out.push({ ...base, w: 4, h: 4, kind: Kind.Solid, alpha: 0.32 });
+        const d = 0.55 + rnd() * 0.9;
+        const base = { home: null, x: px, y: py, d, ax: 4 + rnd() * 10, ay: 4 + rnd() * 10, phase: rnd() * 6.28, speed: 0.15 + rnd() * 0.3, ix: 1, iy: 1, hue: null };
+        const o = 0.6 + 0.6 * d; // nearer = less transparent
+        if (r < 0.5) out.push({ ...base, w: 4, h: 4, kind: Kind.Solid, alpha: 0.32 * o });
         else if (r < 0.85) {
           const sz = 10 + rnd() * 18;
-          out.push({ ...base, w: sz, h: sz, kind: Kind.Stroke, alpha: 0.16 });
-        } else out.push({ ...base, w: 40 + rnd() * 90, h: 1, kind: Kind.Fill, alpha: 0.16 });
+          out.push({ ...base, w: sz, h: sz, kind: Kind.Stroke, alpha: 0.18 * o });
+        } else out.push({ ...base, w: 40 + rnd() * 90, h: 1, kind: Kind.Fill, alpha: 0.18 * o });
       }
+
+    this.backdrop(out, geo, sheets, s);
+    this.nets = this.networks(geo, s);
 
     // draw far shapes first
     this.decos = out.sort((a, b) => a.d - b.d);
+  }
+
+  /**
+   * Several faint planes of rectangles spread over the whole canvas, each one further away:
+   * when the camera travels from one sheet to the next, the far planes barely move.
+   */
+  private backdrop(out: Deco[], geo: Geometry, sheets: SheetDef[], s: number) {
+    const { sw, sh, bounds: b } = geo;
+    const k = geo.compact ? 0.65 : 1;
+    const anchors = sheets.map((def) => ({ hue: def.hue, ...geo.get(def.id).anchor }));
+    const nearestHue = (x: number, y: number) => {
+      let best = anchors[0];
+      let bd = Infinity;
+      for (const a of anchors) {
+        const dd = (a.x - x) ** 2 + (a.y - y) ** 2;
+        if (dd < bd) {
+          bd = dd;
+          best = a;
+        }
+      }
+      return best.hue;
+    };
+
+    // `opacity`: nearer planes are less transparent
+    const layers = [
+      { d: 0.16, cell: 560, keep: 0.5, seed: 101, opacity: 0.85 },
+      { d: 0.32, cell: 420, keep: 0.55, seed: 202, opacity: 1.2 },
+      { d: 0.5, cell: 320, keep: 0.55, seed: 303, opacity: 1.6 },
+    ];
+    for (const [li, L] of layers.entries()) {
+      const rnd = rng(L.seed);
+      const R = (a: number, c: number) => a + (c - a) * rnd();
+      const cell = L.cell * s * k;
+      // the camera only sweeps `bounds * d` of this plane, plus one screen around it
+      const x0 = b.x * L.d - sw * 1.5;
+      const x1 = (b.x + b.w) * L.d + sw * 1.5;
+      const y0 = b.y * L.d - sh * 1.5;
+      const y1 = (b.y + b.h) * L.d + sh * 1.5;
+      for (let gx = x0; gx < x1; gx += cell)
+        for (let gy = y0; gy < y1; gy += cell) {
+          if (rnd() > L.keep) continue;
+          const px = snap8(gx + R(0, cell * 0.6));
+          const py = snap8(gy + R(0, cell * 0.6));
+          const tinted = rnd() < 0.4;
+          const hue = tinted ? nearestHue(px / L.d, py / L.d) : null;
+          const base = {
+            home: null,
+            d: L.d + R(-0.03, 0.03),
+            ax: R(1, 4),
+            ay: R(1, 5),
+            phase: R(0, 6.28),
+            speed: R(0.08, 0.2),
+            ix: 1,
+            iy: 1,
+            deep: true,
+            hue,
+          };
+          const sz = (a: number, c: number) => Math.max(8, snap8(R(a, c) * s * k));
+          const tint = (tinted ? 1.8 : 1) * L.opacity;
+          const r = rnd();
+          if (li === 0) {
+            // far: large soft panels, sometimes outlined
+            const w = sz(180, 440);
+            const h = sz(120, 320);
+            out.push({ ...base, x: px, y: py, w, h, kind: Kind.Fill, alpha: 0.022 * tint });
+            if (r < 0.45) out.push({ ...base, x: px, y: py, w, h, kind: Kind.Stroke, alpha: 0.05 * tint });
+          } else if (li === 1) {
+            // middle: outlined frames, a few panels and dot grids
+            if (r < 0.6) out.push({ ...base, x: px, y: py, w: sz(80, 240), h: sz(60, 180), kind: Kind.Stroke, alpha: 0.065 * tint });
+            else if (r < 0.85) out.push({ ...base, x: px, y: py, w: sz(60, 160), h: sz(40, 120), kind: Kind.Fill, alpha: 0.03 * tint });
+            else out.push({ ...base, x: px, y: py, w: sz(48, 96), h: sz(32, 64), kind: Kind.Dots, alpha: 0.1 * L.opacity });
+          } else {
+            // nearest backdrop plane: small frames, hairlines and specks
+            if (r < 0.55) {
+              const q = sz(24, 96);
+              out.push({ ...base, x: px, y: py, w: q, h: rnd() < 0.5 ? q : sz(16, 64), kind: Kind.Stroke, alpha: 0.085 * tint });
+            } else if (r < 0.75) out.push({ ...base, x: px, y: py, w: sz(60, 200), h: 1, kind: Kind.Fill, alpha: 0.07 * L.opacity });
+            else out.push({ ...base, x: px, y: py, w: 4, h: 4, kind: Kind.Solid, alpha: (tinted ? 0.3 : 0.12) * L.opacity });
+          }
+        }
+    }
+  }
+
+  /**
+   * Networks (nodes linked by lines) on many planes, from far to near.
+   * Each one gets `q`, its nearness (0 = farthest, 1 = nearest): near networks are
+   * spread wider, with bigger nodes, thicker links and stronger colour.
+   */
+  private networks(geo: Geometry, s: number): Net[] {
+    const { sw, sh, bounds: b } = geo;
+    const k = geo.compact ? 0.65 : 1;
+    const nets: Net[] = [];
+    const planes = [
+      { d: NET_FAR, cell: 1000, keep: 0.4, seed: 707 },
+      { d: 0.28, cell: 1000, keep: 0.38, seed: 808 },
+      { d: 0.42, cell: 1150, keep: 0.34, seed: 909 },
+      { d: 0.6, cell: 1400, keep: 0.3, seed: 1010 },
+      { d: NET_NEAR, cell: 1700, keep: 0.28, seed: 1111 },
+    ];
+    const hues: Hue[] = ['orange', 'violet', 'blue', 'red'];
+    for (const P of planes) {
+      const rnd = rng(P.seed);
+      const R = (a: number, c: number) => a + (c - a) * rnd();
+      const q = (P.d - NET_FAR) / (NET_NEAR - NET_FAR);
+      const spread = (0.8 + 0.9 * q) * s * k;
+      const cell = P.cell * s * k;
+      for (let gx = b.x * P.d - sw * 1.5; gx < (b.x + b.w) * P.d + sw * 1.5; gx += cell)
+        for (let gy = b.y * P.d - sh * 1.5; gy < (b.y + b.h) * P.d + sh * 1.5; gy += cell) {
+          if (rnd() > P.keep) continue;
+          const cx = gx + R(0.2, 0.8) * cell;
+          const cy = gy + R(0.2, 0.8) * cell;
+          const rw = R(170, 300) * spread;
+          const rh = R(120, 220) * spread;
+          const n = 5 + Math.floor(rnd() * 5);
+          const nodes: NetNode[] = [];
+          for (let i = 0; i < n; i++) {
+            nodes.push({
+              x: snap8(cx + R(-rw, rw)),
+              y: snap8(cy + R(-rh, rh)),
+              ax: R(6, 16) * (0.8 + q),
+              ay: R(6, 16) * (0.8 + q),
+              phase: R(0, 6.28),
+              speed: R(0.12, 0.28),
+              hub: rnd() < 0.3,
+            });
+          }
+          // each node links to its nearest predecessor (a tree), plus a few extra links
+          const edges: [number, number][] = [];
+          const dist = (i: number, j: number) => (nodes[i].x - nodes[j].x) ** 2 + (nodes[i].y - nodes[j].y) ** 2;
+          for (let i = 1; i < n; i++) {
+            const order = [...Array(i).keys()].sort((a, c) => dist(i, a) - dist(i, c));
+            edges.push([order[0], i]);
+            if (order.length > 1 && rnd() < 0.35) edges.push([order[1], i]);
+          }
+          const packets = [];
+          const np = 1 + Math.floor(rnd() * (2 + q * 2));
+          for (let i = 0; i < np; i++) packets.push({ edge: Math.floor(rnd() * edges.length), period: R(2.5, 5.5), offset: R(0, 10) });
+          // far networks are often neutral, near ones always carry a colour
+          const hue = rnd() < 0.45 + 0.55 * q ? hues[Math.floor(rnd() * hues.length)] : null;
+          nets.push({ d: P.d + R(-0.02, 0.02), q, hue, nodes, edges, packets });
+        }
+    }
+    // far networks first
+    return nets.sort((a, c) => a.d - c.d);
+  }
+
+  private drawNets(st: DrawState, P: ReturnType<typeof getPalette>, t: number, alpha: number, from: number, to: number) {
+    const { ctx, w, h } = this;
+    const { cam } = st;
+    const z = cam.z;
+    const xs: number[] = [];
+    const ys: number[] = [];
+    for (const net of this.nets) {
+      if (net.d <= from || net.d > to) continue;
+      const zE = Math.pow(z, net.d);
+      const ox = w / 2 - cam.x * z * net.d;
+      const oy = h / 2 - cam.y * z * net.d;
+      xs.length = 0;
+      ys.length = 0;
+      let x0 = Infinity;
+      let x1 = -Infinity;
+      let y0 = Infinity;
+      let y1 = -Infinity;
+      for (const nd of net.nodes) {
+        const x = ox + (nd.x + nd.ax * Math.sin(t * nd.speed + nd.phase)) * zE;
+        const y = oy + (nd.y + nd.ay * Math.cos(t * nd.speed * 0.9 + nd.phase * 1.3)) * zE;
+        xs.push(x);
+        ys.push(y);
+        x0 = Math.min(x0, x);
+        x1 = Math.max(x1, x);
+        y0 = Math.min(y0, y);
+        y1 = Math.max(y1, y);
+      }
+      if (x0 > w + 20 || x1 < -20 || y0 > h + 20 || y1 < -20) continue;
+
+      const q = net.q;
+      const neutral = P.deco;
+      const color = net.hue ? P.hues[net.hue] : neutral;
+      // size and strength grow with nearness
+      const dot = (2.5 + 4 * q) * zE;
+      const hub = (6 + 10 * q) * zE;
+      const pk = (3 + 4 * q) * zE;
+
+      // links: a neutral base, then a coloured pass that gets stronger up close
+      ctx.lineWidth = 1 + 0.8 * q;
+      ctx.beginPath();
+      for (const [i, j] of net.edges) {
+        ctx.moveTo(xs[i], ys[i]);
+        ctx.lineTo(xs[j], ys[j]);
+      }
+      ctx.globalAlpha = (0.08 + 0.08 * q) * alpha;
+      ctx.strokeStyle = neutral;
+      ctx.stroke();
+      if (net.hue) {
+        ctx.globalAlpha = (0.05 + 0.2 * q) * alpha;
+        ctx.strokeStyle = color;
+        ctx.stroke();
+      }
+
+      // nodes
+      for (let i = 0; i < xs.length; i++) {
+        const x = Math.round(xs[i]);
+        const y = Math.round(ys[i]);
+        if (net.nodes[i].hub) {
+          ctx.globalAlpha = (0.3 + 0.45 * q) * alpha;
+          ctx.strokeStyle = color;
+          ctx.strokeRect(x - hub / 2 + 0.5, y - hub / 2 + 0.5, Math.round(hub), Math.round(hub));
+        } else {
+          ctx.globalAlpha = (0.26 + 0.4 * q) * alpha;
+          ctx.fillStyle = i % 3 === 0 ? color : neutral;
+          ctx.fillRect(x - dot / 2, y - dot / 2, dot, dot);
+        }
+      }
+
+      // packets travelling along a link, with a short fade at both ends
+      if (st.motion) {
+        ctx.fillStyle = net.hue ? color : P.accent;
+        for (const p of net.packets) {
+          const [i, j] = net.edges[p.edge];
+          const u = ((t + p.offset) / p.period) % 1;
+          const v = Math.min(1, u * 1.6);
+          const f = u < 0.625 ? Math.sin(v * Math.PI) : 0;
+          if (f < 0.02) continue;
+          ctx.globalAlpha = (0.6 + 0.4 * q) * f * alpha;
+          ctx.fillRect(xs[i] + (xs[j] - xs[i]) * v - pk / 2, ys[i] + (ys[j] - ys[i]) * v - pk / 2, pk, pk);
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
   }
 
   private cluster(
@@ -207,11 +476,11 @@ export class Background {
       });
     };
 
-    out.push({ home: def.id, x: cx, y: cy, w: R(340, 480) * s * k, h: 0, d: 0.7, kind: Kind.Glow, hue: def.hue, alpha: 0.11, ax: 6, ay: 6, phase: R(0, 6.28), speed: 0.12, ix, iy });
+    out.push({ home: def.id, x: cx, y: cy, w: R(340, 480) * s * k, h: 0, d: 0.7, kind: Kind.Glow, hue: def.hue, alpha: 0.14, ax: 6, ay: 6, phase: R(0, 6.28), speed: 0.12, ix, iy });
     // soft, large pieces may run under the content
-    add(R(-90, -20), R(-110, -30), R(240, 360), R(260, 400), 0.78, Kind.Gradient, def.hue, R(0.18, 0.24), 0.6);
+    add(R(-90, -20), R(-110, -30), R(240, 360), R(260, 400), 0.78, Kind.Gradient, def.hue, R(0.22, 0.3), 0.6);
     add(R(20, 70), R(30, 90), R(150, 240), R(110, 190), 0.88, Kind.Stroke, null, 0.12, 0.8);
-    add(R(-30, 30), R(120, 200), R(70, 140), R(50, 90), 0.95, Kind.Fill, def.hue, 0.1);
+    add(R(-30, 30), R(120, 200), R(70, 140), R(50, 90), 0.95, Kind.Fill, def.hue, 0.14);
     // crisp pieces stay in the margins
     add(R(120, 260), R(10, 60), R(60, 110), R(40, 70), 1.0, Kind.Stroke, def.hue, 0.5, 1, true);
     add(R(10, 50), R(150, 240), 64, 40, 1.06, Kind.Dots, null, 0.4, 1, true);
@@ -237,11 +506,21 @@ export class Background {
     const pf = smoothstep(0.22, 0.75, z) * st.motion;
     const t = st.time * st.motion;
     const fade = this.intro * (st.overview ? 0.55 : 1);
+    // backdrop planes only cover what the camera sees near zoom 1: hide them when zoomed far out
+    const deepFade = smoothstep(0.3, 0.6, z);
     const anchors = new Map<string, { x: number; y: number }>();
     for (const [id, g] of geo.map) anchors.set(id, g.anchor);
 
+    // networks are drawn in between the rectangles, at their own depth
+    const netAlpha = fade * deepFade * NET_ALPHA;
+    let netDepth = -Infinity;
     for (const r of this.decos) {
-      const d = 1 + (r.d - 1) * pf;
+      if (r.d > netDepth && netAlpha > 0.01) {
+        this.drawNets(st, P, t, netAlpha, netDepth, r.d);
+        netDepth = r.d;
+      }
+      if (r.deep && deepFade < 0.01) continue;
+      const d = r.deep ? r.d : 1 + (r.d - 1) * pf;
       const zE = Math.pow(z, d);
       let ox: number;
       let oy: number;
@@ -258,7 +537,7 @@ export class Background {
       const x = w / 2 + ox + (r.x + dx) * zE;
       const y = h / 2 + oy + (r.y + dy) * zE;
       const color = r.hue ? P.hues[r.hue] : P.deco;
-      const a = r.alpha * (0.8 + 0.2 * Math.sin(t * r.speed * 0.7 + r.phase * 2.3)) * fade;
+      const a = r.alpha * (0.8 + 0.2 * Math.sin(t * r.speed * 0.7 + r.phase * 2.3)) * fade * (r.deep ? deepFade * BACKDROP_ALPHA : 1);
       if (a < 0.004) continue;
 
       if (r.kind === Kind.Glow) {
@@ -313,6 +592,7 @@ export class Background {
         }
       }
     }
+    if (netAlpha > 0.01) this.drawNets(st, P, t, netAlpha, netDepth, Infinity);
     ctx.globalAlpha = 1;
 
     // sheet outlines and names, only once zoomed out enough to need them
