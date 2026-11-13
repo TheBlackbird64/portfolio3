@@ -1,44 +1,3 @@
-import { damp } from '../core/util';
-
-/* ------------------------------------------------------- variable-font name */
-
-/** Letters of the hero name widen and thicken near the cursor (Archivo's wdth + wght axes). */
-export class NameProximity {
-  private chars: HTMLElement[];
-  private cur: { s: number; w: number }[];
-
-  constructor(root: HTMLElement) {
-    this.chars = Array.from(root.querySelectorAll<HTMLElement>('.ch'));
-    this.cur = this.chars.map(() => ({ s: 0, w: 0 }));
-  }
-
-  /** Returns true while still animating. */
-  tick(dt: number, px: number | null, py: number | null): boolean {
-    let moving = false;
-    const rects = px === null ? null : this.chars.map((c) => c.getBoundingClientRect());
-    this.chars.forEach((ch, i) => {
-      let f = 0;
-      if (rects && py !== null && px !== null) {
-        const r = rects[i];
-        const d = Math.hypot(r.left + r.width / 2 - px, r.top + r.height / 2 - py);
-        const t = Math.max(0, 1 - d / 260);
-        f = t * t * (3 - 2 * t);
-      }
-      const c = this.cur[i];
-      const ns = damp(c.s, f, 9, dt);
-      const nw = damp(c.w, f, 9, dt);
-      if (Math.abs(ns - c.s) > 0.002 || Math.abs(nw - c.w) > 0.002) {
-        moving = true;
-        c.s = ns;
-        c.w = nw;
-        ch.style.fontStretch = `${(100 + 22 * ns).toFixed(1)}%`;
-        ch.style.fontWeight = `${Math.round(640 + 240 * nw)}`;
-      }
-    });
-    return moving;
-  }
-}
-
 /* ------------------------------------------------------------------- clock */
 
 export function startClock(els: HTMLElement[], city: string, timeZone: string) {
@@ -135,4 +94,36 @@ export function bindCopy(root: ParentNode) {
       }, 1800);
     });
   });
+}
+
+/* ------------------------------------------------------------ outline trace */
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** Text boxes: the outline draws itself, holds, then erases, in a loop. */
+const LOOPED = '.logbox, .code, .sim, .skills, .portrait__frame';
+/** Buttons: same animation, but only while hovered (or focused). */
+const ON_HOVER = '.btn';
+
+function addTrace(el: HTMLElement, hover: boolean) {
+  if (el.classList.contains('has-trace')) return;
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('class', 'trace');
+  svg.setAttribute('aria-hidden', 'true');
+  const rect = document.createElementNS(SVG_NS, 'rect');
+  for (const [k, v] of Object.entries({ x: '0', y: '0', width: '100%', height: '100%', pathLength: '1' })) rect.setAttribute(k, v);
+  svg.append(rect);
+  if (!hover) {
+    // each box has its own pace and phase so they never pulse together
+    const dur = 3.5 + Math.random() * 1.5;
+    svg.style.setProperty('--trace-dur', `${dur.toFixed(2)}s`);
+    svg.style.setProperty('--trace-delay', `${(-Math.random() * dur).toFixed(2)}s`);
+  }
+  el.classList.add('has-trace', hover ? 'has-trace--hover' : 'has-trace--loop');
+  el.append(svg);
+}
+
+export function addTraces(root: ParentNode) {
+  for (const el of root.querySelectorAll<HTMLElement>(LOOPED)) addTrace(el, false);
+  for (const el of root.querySelectorAll<HTMLElement>(ON_HOVER)) addTrace(el, true);
 }

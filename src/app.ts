@@ -4,7 +4,7 @@ import { Geometry } from './core/geometry';
 import { mapGlyph, NavArrows } from './core/nav';
 import { currentTheme, setTheme } from './core/theme';
 import { clamp, damp, easeInOutCubic, lerp, pad, qs, qsa, reducedMotion, zoomPath, type Cam } from './core/util';
-import { bindCopy, LogStream, NameProximity, startClock } from './fx/details';
+import { addTraces, bindCopy, LogStream, startClock } from './fx/details';
 import { reveal, revealHeroName } from './fx/reveal';
 import { LoadBalancerSim } from './fx/sim';
 import { Background } from './render/background';
@@ -91,12 +91,10 @@ export class App {
   private dirty = true;
   private revealCheck = false;
   private hoverId: string | null = null;
-  private pointer = { x: 0, y: 0, inside: false, cx: 0, cy: 0 };
+  private pointer = { x: 0, y: 0, inside: false };
   private stageRect = new DOMRect();
   private drag: { x: number; y: number; camX: number; camY: number; moved: boolean; id: number } | null = null;
   private touch: { x: number; y: number; scroll: number; axis: 'x' | 'y' | null; lastY: number; lastT: number; vy: number; id: number } | null = null;
-  private name?: NameProximity;
-  private nameActive = false;
   private time = 0;
   private bgSkip = false;
 
@@ -127,10 +125,9 @@ export class App {
       this.byId.set(def.id, sheet);
     }
 
-    const nameEl = root.querySelector<HTMLElement>('[data-hero-name]');
-    if (nameEl) this.name = new NameProximity(nameEl);
     startClock(qsa('[data-clock]', root), site.city, site.timezone);
     bindCopy(root);
+    addTraces(document);
     this.nav = new NavArrows(root);
 
     const initial = location.pathname === OVERVIEW_PATH ? undefined : sheetFromPath(location.pathname);
@@ -188,10 +185,6 @@ export class App {
         this.cam.y = g.anchor.y + this.scroll + this.nudge;
         this.dirty = true;
         this.revealCheck = true;
-      }
-      if (this.nameActive && this.name) {
-        const inside = this.pointer.inside;
-        this.name.tick(dt, inside ? this.pointer.cx : null, inside ? this.pointer.cy : null);
       }
     }
 
@@ -340,7 +333,6 @@ export class App {
     s.logs?.start();
     s.sim?.start();
     s.svgs.forEach((svg) => svg.unpauseAnimations());
-    this.nameActive = s.def.kind === 'index' && !!this.name;
     this.setChromeHue(s.def);
     this.setActive(s.def.id);
     this.updatePager();
@@ -354,7 +346,6 @@ export class App {
     s.logs?.stop();
     s.sim?.stop();
     s.svgs.forEach((svg) => svg.pauseAnimations());
-    this.nameActive = false;
   }
 
   private checkReveals(initial: boolean) {
@@ -615,8 +606,6 @@ export class App {
     });
 
     window.addEventListener('pointermove', (e) => {
-      this.pointer.cx = e.clientX;
-      this.pointer.cy = e.clientY;
       const r = this.stageRect;
       this.pointer.x = e.clientX - r.left;
       this.pointer.y = e.clientY - r.top;

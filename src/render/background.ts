@@ -1,7 +1,8 @@
 import type { Geometry } from '../core/geometry';
 import { FONT_MONO, getPalette } from '../core/theme';
-import { clamp, pad, smoothstep, type Cam } from '../core/util';
+import { clamp, pad, rng, smoothstep, type Cam } from '../core/util';
 import type { Hue, SheetDef } from '../sheets/registry';
+import { NET_ALPHA, NetworkField } from './network';
 
 /*
  * Abstract background: slowly drifting rectangles, gathered in two opposite
@@ -44,34 +45,8 @@ interface Deco {
   deep?: boolean;
 }
 
-/** Global knobs for the far backdrop (rectangle planes and networks). Raise them to make it more visible. */
+/** Global knob for the far backdrop rectangle planes. Raise it to make them more visible. */
 const BACKDROP_ALPHA = 2.3;
-const NET_ALPHA = 1;
-/** Depth range of the networks: the nearest ones look bigger, bolder and more colourful. */
-const NET_NEAR = 0.8;
-const NET_FAR = 0.16;
-
-interface NetNode {
-  x: number;
-  y: number;
-  ax: number;
-  ay: number;
-  phase: number;
-  speed: number;
-  /** Drawn as a small hollow square instead of a dot. */
-  hub: boolean;
-}
-
-/** A small graph floating on a backdrop plane: nodes drift, packets travel along the links. */
-interface Net {
-  d: number;
-  /** Nearness, 0 (farthest network) to 1 (nearest). */
-  q: number;
-  hue: Hue | null;
-  nodes: NetNode[];
-  edges: [number, number][];
-  packets: { edge: number; period: number; offset: number }[];
-}
 
 export interface DrawState {
   cam: Cam;
@@ -82,17 +57,6 @@ export interface DrawState {
   time: number;
   /** 0 when reduced motion is requested. */
   motion: number;
-}
-
-function rng(seed: number) {
-  let s = seed >>> 0;
-  return () => {
-    s = (s + 0x6d2b79f5) >>> 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
 }
 
 const snap8 = (v: number) => Math.round(v / 8) * 8;
@@ -111,7 +75,7 @@ export class Background {
   private w = 1;
   private h = 1;
   private decos: Deco[] = [];
-  private nets: Net[] = [];
+  private field = new NetworkField();
   /** Global fade used by the intro. */
   intro = 0;
 
@@ -192,7 +156,7 @@ export class Background {
       }
 
     this.backdrop(out, geo, sheets, s);
-    this.nets = this.networks(geo, s);
+    this.field.build(geo, sheets, s);
 
     // draw far shapes first
     this.decos = out.sort((a, b) => a.d - b.d);
@@ -279,154 +243,6 @@ export class Background {
     }
   }
 
-  /**
-   * Networks (nodes linked by lines) on many planes, from far to near.
-   * Each one gets `q`, its nearness (0 = farthest, 1 = nearest): near networks are
-   * spread wider, with bigger nodes, thicker links and stronger colour.
-   */
-  private networks(geo: Geometry, s: number): Net[] {
-    const { sw, sh, bounds: b } = geo;
-    const k = geo.compact ? 0.65 : 1;
-    const nets: Net[] = [];
-    const planes = [
-      { d: NET_FAR, cell: 1000, keep: 0.4, seed: 707 },
-      { d: 0.28, cell: 1000, keep: 0.38, seed: 808 },
-      { d: 0.42, cell: 1150, keep: 0.34, seed: 909 },
-      { d: 0.6, cell: 1400, keep: 0.3, seed: 1010 },
-      { d: NET_NEAR, cell: 1700, keep: 0.28, seed: 1111 },
-    ];
-    const hues: Hue[] = ['orange', 'violet', 'blue', 'red'];
-    for (const P of planes) {
-      const rnd = rng(P.seed);
-      const R = (a: number, c: number) => a + (c - a) * rnd();
-      const q = (P.d - NET_FAR) / (NET_NEAR - NET_FAR);
-      const spread = (0.8 + 0.9 * q) * s * k;
-      const cell = P.cell * s * k;
-      for (let gx = b.x * P.d - sw * 1.5; gx < (b.x + b.w) * P.d + sw * 1.5; gx += cell)
-        for (let gy = b.y * P.d - sh * 1.5; gy < (b.y + b.h) * P.d + sh * 1.5; gy += cell) {
-          if (rnd() > P.keep) continue;
-          const cx = gx + R(0.2, 0.8) * cell;
-          const cy = gy + R(0.2, 0.8) * cell;
-          const rw = R(170, 300) * spread;
-          const rh = R(120, 220) * spread;
-          const n = 5 + Math.floor(rnd() * 5);
-          const nodes: NetNode[] = [];
-          for (let i = 0; i < n; i++) {
-            nodes.push({
-              x: snap8(cx + R(-rw, rw)),
-              y: snap8(cy + R(-rh, rh)),
-              ax: R(6, 16) * (0.8 + q),
-              ay: R(6, 16) * (0.8 + q),
-              phase: R(0, 6.28),
-              speed: R(0.12, 0.28),
-              hub: rnd() < 0.3,
-            });
-          }
-          // each node links to its nearest predecessor (a tree), plus a few extra links
-          const edges: [number, number][] = [];
-          const dist = (i: number, j: number) => (nodes[i].x - nodes[j].x) ** 2 + (nodes[i].y - nodes[j].y) ** 2;
-          for (let i = 1; i < n; i++) {
-            const order = [...Array(i).keys()].sort((a, c) => dist(i, a) - dist(i, c));
-            edges.push([order[0], i]);
-            if (order.length > 1 && rnd() < 0.35) edges.push([order[1], i]);
-          }
-          const packets = [];
-          const np = 1 + Math.floor(rnd() * (2 + q * 2));
-          for (let i = 0; i < np; i++) packets.push({ edge: Math.floor(rnd() * edges.length), period: R(2.5, 5.5), offset: R(0, 10) });
-          // far networks are often neutral, near ones always carry a colour
-          const hue = rnd() < 0.45 + 0.55 * q ? hues[Math.floor(rnd() * hues.length)] : null;
-          nets.push({ d: P.d + R(-0.02, 0.02), q, hue, nodes, edges, packets });
-        }
-    }
-    // far networks first
-    return nets.sort((a, c) => a.d - c.d);
-  }
-
-  private drawNets(st: DrawState, P: ReturnType<typeof getPalette>, t: number, alpha: number, from: number, to: number) {
-    const { ctx, w, h } = this;
-    const { cam } = st;
-    const z = cam.z;
-    const xs: number[] = [];
-    const ys: number[] = [];
-    for (const net of this.nets) {
-      if (net.d <= from || net.d > to) continue;
-      const zE = Math.pow(z, net.d);
-      const ox = w / 2 - cam.x * z * net.d;
-      const oy = h / 2 - cam.y * z * net.d;
-      xs.length = 0;
-      ys.length = 0;
-      let x0 = Infinity;
-      let x1 = -Infinity;
-      let y0 = Infinity;
-      let y1 = -Infinity;
-      for (const nd of net.nodes) {
-        const x = ox + (nd.x + nd.ax * Math.sin(t * nd.speed + nd.phase)) * zE;
-        const y = oy + (nd.y + nd.ay * Math.cos(t * nd.speed * 0.9 + nd.phase * 1.3)) * zE;
-        xs.push(x);
-        ys.push(y);
-        x0 = Math.min(x0, x);
-        x1 = Math.max(x1, x);
-        y0 = Math.min(y0, y);
-        y1 = Math.max(y1, y);
-      }
-      if (x0 > w + 20 || x1 < -20 || y0 > h + 20 || y1 < -20) continue;
-
-      const q = net.q;
-      const neutral = P.deco;
-      const color = net.hue ? P.hues[net.hue] : neutral;
-      // size and strength grow with nearness
-      const dot = (2.5 + 4 * q) * zE;
-      const hub = (6 + 10 * q) * zE;
-      const pk = (3 + 4 * q) * zE;
-
-      // links: a neutral base, then a coloured pass that gets stronger up close
-      ctx.lineWidth = 1 + 0.8 * q;
-      ctx.beginPath();
-      for (const [i, j] of net.edges) {
-        ctx.moveTo(xs[i], ys[i]);
-        ctx.lineTo(xs[j], ys[j]);
-      }
-      ctx.globalAlpha = (0.08 + 0.08 * q) * alpha;
-      ctx.strokeStyle = neutral;
-      ctx.stroke();
-      if (net.hue) {
-        ctx.globalAlpha = (0.05 + 0.2 * q) * alpha;
-        ctx.strokeStyle = color;
-        ctx.stroke();
-      }
-
-      // nodes
-      for (let i = 0; i < xs.length; i++) {
-        const x = Math.round(xs[i]);
-        const y = Math.round(ys[i]);
-        if (net.nodes[i].hub) {
-          ctx.globalAlpha = (0.3 + 0.45 * q) * alpha;
-          ctx.strokeStyle = color;
-          ctx.strokeRect(x - hub / 2 + 0.5, y - hub / 2 + 0.5, Math.round(hub), Math.round(hub));
-        } else {
-          ctx.globalAlpha = (0.26 + 0.4 * q) * alpha;
-          ctx.fillStyle = i % 3 === 0 ? color : neutral;
-          ctx.fillRect(x - dot / 2, y - dot / 2, dot, dot);
-        }
-      }
-
-      // packets travelling along a link, with a short fade at both ends
-      if (st.motion) {
-        ctx.fillStyle = net.hue ? color : P.accent;
-        for (const p of net.packets) {
-          const [i, j] = net.edges[p.edge];
-          const u = ((t + p.offset) / p.period) % 1;
-          const v = Math.min(1, u * 1.6);
-          const f = u < 0.625 ? Math.sin(v * Math.PI) : 0;
-          if (f < 0.02) continue;
-          ctx.globalAlpha = (0.6 + 0.4 * q) * f * alpha;
-          ctx.fillRect(xs[i] + (xs[j] - xs[i]) * v - pk / 2, ys[i] + (ys[j] - ys[i]) * v - pk / 2, pk, pk);
-        }
-      }
-    }
-    ctx.globalAlpha = 1;
-  }
-
   private cluster(
     out: Deco[],
     def: SheetDef,
@@ -511,14 +327,10 @@ export class Background {
     const anchors = new Map<string, { x: number; y: number }>();
     for (const [id, g] of geo.map) anchors.set(id, g.anchor);
 
-    // networks are drawn in between the rectangles, at their own depth
+    // networks sit behind every rectangle (they still move with their own depth)
     const netAlpha = fade * deepFade * NET_ALPHA;
-    let netDepth = -Infinity;
+    if (netAlpha > 0.01) this.field.draw(ctx, w, h, cam, P, t, st.motion, netAlpha);
     for (const r of this.decos) {
-      if (r.d > netDepth && netAlpha > 0.01) {
-        this.drawNets(st, P, t, netAlpha, netDepth, r.d);
-        netDepth = r.d;
-      }
       if (r.deep && deepFade < 0.01) continue;
       const d = r.deep ? r.d : 1 + (r.d - 1) * pf;
       const zE = Math.pow(z, d);
@@ -592,7 +404,6 @@ export class Background {
         }
       }
     }
-    if (netAlpha > 0.01) this.drawNets(st, P, t, netAlpha, netDepth, Infinity);
     ctx.globalAlpha = 1;
 
     // sheet outlines and names, only once zoomed out enough to need them

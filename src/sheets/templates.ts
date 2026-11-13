@@ -144,11 +144,9 @@ function projectSheet(def: SheetDef) {
   ${section(5, 'Résultats', `<p data-reveal>${p.results.intro}</p><div class="compare">${p.results.compare.map(compareRow).join('')}</div>`)}
   ${section(6, 'Rétrospective', `<p class="retro" data-reveal="lines">${p.retro}</p>`)}
 
-  <a class="next" href="${next.path}" data-reveal style="--accent: var(--${next.hue})">
-    <span class="next__label">${next.kind === 'project' ? 'Projet suivant' : 'Ensuite'}</span>
-    <span class="next__title">${next.title}<span class="next__arrow">${ARROW}</span></span>
-    <span class="next__sub">${next.sub}</span>
-  </a>`;
+  <div class="next" data-reveal>
+    <a class="btn btn--accent" href="${next.path}" style="--accent: var(--${next.hue})">${next.kind === 'project' ? 'Projet suivant' : 'Ensuite'} : ${next.title} ${ARROW}</a>
+  </div>`;
 }
 
 /* -------------------------------------------------------------------- lab */

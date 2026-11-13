@@ -23,6 +23,8 @@ Puis ouvrir http://127.0.0.1:5173
 | Position des sections sur le canvas, leur couleur (`hue`) et leurs voisins | `src/sheets/registry.ts` (`gx`/`gy` en largeurs/hauteurs d'écran, `links`) |
 | Couleurs des thèmes sombre / clair | `src/styles/tokens.css` |
 | Composition des rectangles du fond | `src/render/background.ts` (`cluster()`) |
+| Réseaux du fond (densité, plans, intensité `NET_ALPHA`) | `src/render/network.ts` (`PLANES`, `PATCH`) |
+| Contour animé (boîtes de texte en boucle, boutons au survol) | `src/fx/details.ts` (`LOOPED`, `ON_HOVER`) ; rythme dans `src/styles/base.css` (`@keyframes trace`) |
 | Mise en page des feuilles | `src/sheets/templates.ts` + `src/styles/sheets.css` |
 
 ## Organisation du code
@@ -31,6 +33,7 @@ Puis ouvrir http://127.0.0.1:5173
 - `src/core/geometry.ts` — placement des sections sur le canvas
 - `src/core/nav.ts` — la navigation fixe, dont les flèches pointent toujours vers leur section
 - `src/render/background.ts` — le fond : rectangles animés avec parallaxe, contours de la vue d'ensemble
+- `src/render/network.ts` — les réseaux (points et liens) répartis sur tout le fond, sur plusieurs plans
 - `src/sheets/` — gabarits HTML, schémas d'architecture SVG, coloration syntaxique
 - `src/fx/` — animations d'apparition, faux logs en direct, simulateur d'équilibreur de charge
 
