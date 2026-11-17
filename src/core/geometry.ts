@@ -92,6 +92,10 @@ export class Geometry {
       const el = els.get(id)!;
       el.style.left = `${frame.x}px`;
       el.style.top = `${frame.y}px`;
+      // lets a sheet reach the edges of its screen (the selector's sweeping band does)
+      el.style.setProperty('--slot-x', `${m}px`);
+      el.style.setProperty('--slot-top', `${top}px`);
+      el.style.setProperty('--slot-bottom', `${this.sh - fh - top}px`);
       x0 = Math.min(x0, frame.x);
       y0 = Math.min(y0, frame.y);
       x1 = Math.max(x1, frame.x + frame.w);

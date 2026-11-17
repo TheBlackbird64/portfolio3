@@ -103,17 +103,19 @@ svg {
 
 /* ---------------------------------------------------------------- common */
 
-.kicker,
-.label {
-  font: 500 11px/1.3 var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--ink-3);
+.kicker {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--ink-2);
 }
 
 .label {
-  font-size: 10px;
   margin-bottom: 16px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ink-3);
 }
 
 .live {
@@ -157,9 +159,8 @@ svg {
   gap: 12px;
   height: 46px;
   padding: 0 20px;
-  font: 500 12px/1 var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font: 600 14px/1 var(--font-sans);
+  letter-spacing: -0.005em;
   color: var(--ink);
   /* a faint wash of the section colour */
   background: color-mix(in srgb, var(--accent) 7%, transparent);
@@ -199,9 +200,9 @@ svg {
 }
 
 .btn--sm {
-  height: 34px;
+  height: 36px;
   padding: 0 14px;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .btn.is-done {
@@ -293,4 +294,49 @@ svg {
   .has-trace--hover > .trace rect {
     transition: none;
   }
+}
+
+/* ------------------------------------------------------------- surfaces */
+
+/* blocks: frosted glass over the background, so their text stays readable */
+.index__status,
+.slide__card,
+.logbox,
+.code,
+.sim,
+.skills,
+.portrait__frame {
+  border: 1px solid var(--line-2);
+  background: color-mix(in srgb, var(--bg) 62%, transparent);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+/* key texts: no box, just a soft blur behind them that fades out at the edges */
+.lead,
+.statement,
+.proj-tagline,
+.proj-summary {
+  position: relative;
+  isolation: isolate;
+}
+
+.lead::before,
+.statement::before,
+.proj-tagline::before,
+.proj-summary::before {
+  content: '';
+  position: absolute;
+  inset: -22px -32px;
+  z-index: -1;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--bg) 40%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  --feather-x: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+  --feather-y: linear-gradient(to bottom, transparent, #000 22px, #000 calc(100% - 22px), transparent);
+  -webkit-mask-image: var(--feather-x), var(--feather-y);
+  -webkit-mask-composite: source-in;
+  mask-image: var(--feather-x), var(--feather-y);
+  mask-composite: intersect;
 }

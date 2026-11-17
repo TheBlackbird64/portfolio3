@@ -6,8 +6,7 @@ import type { Hue, SheetDef } from '../sheets/registry';
 /*
  * Network field: nodes and links spread over several far planes, everywhere in the
  * background. A low-frequency noise thins them out, so some areas are dense, others
- * sparse or empty. Nodes drift, links stretch and fade when their nodes move apart,
- * and packets travel along some of them.
+ * sparse or empty. Nodes drift, and links stretch and fade when their nodes move apart.
  */
 
 /** Global strength of the networks. Raise it to make them more visible. */
@@ -44,7 +43,7 @@ interface Plane {
   phase: Float32Array;
   speed: Float32Array;
   color: Uint8Array;
-  /** Drawn as a small hollow square instead of a dot. */
+  /** Drawn as a bigger dot. */
   hub: Uint8Array;
   /** Flat list of node pairs. */
   edges: Uint32Array;
@@ -52,7 +51,6 @@ interface Plane {
   reach: number;
   /** Largest node drift, for culling. */
   amp: number;
-  packets: { edge: number; period: number; offset: number }[];
   /** Slow sway of the whole plane. */
   flow: { ax: number; ay: number; phase: number };
   sx: Float32Array;
@@ -86,13 +84,16 @@ const fbm = (x: number, y: number, seed: number) => noise(x, y, seed) * 0.65 + n
 
 export class NetworkField {
   private planes: Plane[] = [];
+  /** Nodes and links are drawn a bit finer on phones. */
+  private size = 1;
   /** Edges grouped by strength level and colour, so they can be stroked in a few batches. */
   private buckets: number[][] = Array.from({ length: LEVELS * COLORS }, () => []);
 
-
   build(geo: Geometry, sheets: SheetDef[], s: number) {
     const { sw, sh, bounds: b } = geo;
-    const k = geo.compact ? 0.7 : 1;
+    this.size = geo.compact ? 0.75 : 1;
+    // the spacing barely shrinks with the screen: a phone shows as many nodes per area as a desktop
+    const spread = Math.max(s * (geo.compact ? 0.7 : 1), 0.85);
     const anchors = sheets.map((def) => ({ hue: def.hue, ...geo.get(def.id).anchor }));
     const nearestHue = (x: number, y: number) => {
       let best = anchors[0];
@@ -111,14 +112,14 @@ export class NetworkField {
       const rnd = rng(P.seed);
       const R = (a: number, c: number) => a + (c - a) * rnd();
       const q = pi / (PLANES.length - 1);
-      const sp = P.spacing * s * k;
+      const sp = P.spacing * spread;
       const reach = sp * 1.5;
       // the camera only sweeps `bounds * d` of this plane, plus one screen and a half around it
       const x0 = b.x * P.d - sw * 1.5;
       const y0 = b.y * P.d - sh * 1.5;
       const cols = Math.ceil(((b.x + b.w) * P.d + sw * 1.5 - x0) / sp);
       const rows = Math.ceil(((b.y + b.h) * P.d + sh * 1.5 - y0) / sp);
-      const patch = PATCH * s * (1 + 0.6 * q);
+      const patch = PATCH * spread * (1 + 0.6 * q);
 
       // jittered grid, thinned by the noise
       const grid = new Int32Array(cols * rows).fill(-1);
@@ -130,7 +131,7 @@ export class NetworkField {
         for (let gx = 0; gx < cols; gx++) {
           const px = x0 + (gx + 0.5 + R(-0.42, 0.42)) * sp;
           const py = y0 + (gy + 0.5 + R(-0.42, 0.42)) * sp;
-          const keep = 0.02 + 0.9 * smoothstep(0.36, 0.7, fbm(px / patch, py / patch, P.seed));
+          const keep = 0.03 + 0.92 * smoothstep(0.3, 0.64, fbm(px / patch, py / patch, P.seed));
           if (rnd() > keep) continue;
           grid[gy * cols + gx] = xs.length;
           xs.push(px);
@@ -157,7 +158,6 @@ export class NetworkField {
         edges: new Uint32Array(0),
         reach,
         amp: sp * 0.24,
-        packets: [],
         flow: { ax: R(20, 40) * s * (0.5 + q), ay: R(14, 30) * s * (0.5 + q), phase: R(0, 6.28) },
         sx: new Float32Array(n),
         sy: new Float32Array(n),
@@ -198,16 +198,12 @@ export class NetworkField {
         }
       }
       L.edges = Uint32Array.from(edges);
-
-      const ne = edges.length / 2;
-      const np = Math.round(ne * (0.04 + 0.04 * q));
-      for (let p = 0; p < np; p++) L.packets.push({ edge: Math.floor(rnd() * ne), period: R(2.5, 6), offset: R(0, 20) });
       return L;
     });
   }
 
   /** Draws every plane, far first. */
-  draw(ctx: CanvasRenderingContext2D, w: number, h: number, cam: Cam, P: Palette, t: number, motion: number, alpha: number) {
+  draw(ctx: CanvasRenderingContext2D, w: number, h: number, cam: Cam, P: Palette, t: number, alpha: number) {
     const z = cam.z;
     const neutral = P.deco;
     const colorOf = (c: number) => (c ? P.hues[HUES[c - 1]] : neutral);
@@ -215,6 +211,7 @@ export class NetworkField {
     for (const L of this.planes) {
       const { q, x, y, ax, ay, phase, speed, sx, sy, vis, color, hub, edges } = L;
       const zE = Math.pow(z, L.d);
+      const zS = zE * this.size;
       const ox = w / 2 - cam.x * z * L.d + L.flow.ax * Math.sin(t * 0.05 + L.flow.phase) * zE;
       const oy = h / 2 - cam.y * z * L.d + L.flow.ay * Math.cos(t * 0.04 + L.flow.phase * 1.7) * zE;
 
@@ -245,7 +242,7 @@ export class NetworkField {
         const lvl = Math.min(LEVELS - 1, (f * LEVELS) | 0);
         this.buckets[lvl * COLORS + (color[i] || color[j])].push(i, j);
       }
-      ctx.lineWidth = (2.2 + 2 * q) * zE;
+      ctx.lineWidth = (2.2 + 2 * q) * zS;
       ctx.lineCap = 'round';
       for (let lvl = 0; lvl < LEVELS; lvl++) {
         const la = (lvl + 1) / LEVELS;
@@ -258,7 +255,7 @@ export class NetworkField {
             ctx.lineTo(sx[bk[e + 1]], sy[bk[e + 1]]);
           }
           // a neutral base, then a coloured pass that gets stronger up close
-          ctx.globalAlpha = (0.08 + 0.07 * q) * la * alpha;
+          ctx.globalAlpha = (0.09 + 0.08 * q) * la * alpha;
           ctx.strokeStyle = neutral;
           ctx.stroke();
           if (c) {
@@ -269,11 +266,9 @@ export class NetworkField {
         }
       }
 
-      // nodes
       // nodes: filled dots, bigger for the hubs (one batched path per colour and size)
-      const dot = Math.max(1.5, (2.8 + 2.6 * q) * zE);
-      const ring = Math.max(3, (5 + 4.5 * q) * zE);
-      ctx.lineWidth = Math.max(1, (1.6 + 1.2 * q) * zE);
+      const dot = Math.max(1.5, (2.8 + 2.6 * q) * zS);
+      const ring = Math.max(3, (5 + 4.5 * q) * zS);
       for (let c = 0; c < COLORS; c++) {
         ctx.fillStyle = colorOf(c);
         for (const big of [0, 1]) {
@@ -286,38 +281,6 @@ export class NetworkField {
           }
           ctx.globalAlpha = (c ? 0.36 + 0.4 * q : 0.22 + 0.28 * q) * alpha;
           ctx.fill();
-        }
-      }
-
-      // packets travel along a link, then a small ring opens where they land
-      if (motion) {
-        const pk = (2.6 + 2.4 * q) * zE;
-        for (const p of L.packets) {
-          const i = edges[p.edge * 2];
-          const j = edges[p.edge * 2 + 1];
-          if (!vis[i] || !vis[j]) continue;
-          const len = Math.hypot(sx[j] - sx[i], sy[j] - sy[i]);
-          const f = 1 - smoothstep(r0, r1, len);
-          if (f < 0.3) continue;
-          const c = color[i] || color[j];
-          const col = c ? colorOf(c) : P.accent;
-          const u = ((t + p.offset) / p.period) % 1;
-          if (u < 0.6) {
-            const v = u / 0.6;
-            ctx.globalAlpha = (0.55 + 0.4 * q) * Math.sin(v * Math.PI) ** 0.5 * f * alpha;
-            ctx.fillStyle = col;
-            ctx.beginPath();
-            ctx.arc(sx[i] + (sx[j] - sx[i]) * v, sy[i] + (sy[j] - sy[i]) * v, pk, 0, TAU);
-            ctx.fill();
-          } else if (u < 0.85) {
-            const k = (u - 0.6) / 0.25;
-            const r = ring + 14 * k * (0.7 + 0.6 * q) * zE;
-            ctx.globalAlpha = (1 - k) * (0.35 + 0.3 * q) * f * alpha;
-            ctx.strokeStyle = col;
-            ctx.beginPath();
-            ctx.arc(sx[j], sy[j], r, 0, TAU);
-            ctx.stroke();
-          }
         }
       }
     }

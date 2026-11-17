@@ -1,5 +1,5 @@
 import type { Geometry } from '../core/geometry';
-import { FONT_MONO, getPalette } from '../core/theme';
+import { currentTheme, FONT_MONO, getPalette } from '../core/theme';
 import { clamp, pad, rng, smoothstep, type Cam } from '../core/util';
 import type { Hue, SheetDef } from '../sheets/registry';
 import { NET_ALPHA, NetworkField } from './network';
@@ -106,25 +106,29 @@ export class Background {
       const rnd = rng(9173 + def.num * 7919);
       const top = -sh / 2;
       const bottom = g.maxScroll + sh / 2;
-      // alternate the diagonal from one sheet to the next
+      // alternate the diagonal from one sheet to the next; pulled in a little from the
+      // screen's very corners so the compositions are seen whole
+      const cx = sw / 2 - Math.min(geo.margin * 0.35, 28);
       const corners: [number, number][] =
         def.num % 2 === 0
           ? [
-              [sw / 2, top],
-              [-sw / 2, bottom],
+              [cx, top + 12],
+              [-cx, bottom - 12],
             ]
           : [
-              [-sw / 2, top],
-              [sw / 2, bottom],
+              [-cx, top + 12],
+              [cx, bottom - 12],
             ];
       const band = { x: geo.margin, top: geo.insetTop, bottom: geo.insetBottom };
       for (const [cx, cy] of corners) this.cluster(out, def, cx, cy, -Math.sign(cx), cy < 0 ? 1 : -1, rnd, s, geo.compact, band);
 
       // tall sheets: a few small shapes in the side margins, so scrolling has depth too
-      const steps = Math.floor(g.maxScroll / (sh * 0.8));
+      // (sparser on phones, whose sheets are much taller and margins much thinner)
+      const stride = sh * (geo.compact ? 1.6 : 0.8);
+      const steps = Math.floor(g.maxScroll / stride);
       for (let k = 1; k <= steps; k++) {
         const side = k % 2 ? 1 : -1;
-        const y = top + k * sh * 0.8 + (rnd() - 0.5) * 160;
+        const y = top + k * stride + (rnd() - 0.5) * 160;
         const x = side * (sw / 2 - geo.margin * (0.3 + rnd() * 0.3));
         const base = { home: def.id, ax: 4 + rnd() * 6, ay: 6 + rnd() * 8, phase: rnd() * 6.28, speed: 0.25 + rnd() * 0.3, ix: -side, iy: 1 };
         const sz = snap8(14 + rnd() * 18) || 8;
@@ -140,7 +144,7 @@ export class Background {
     const cell = 560;
     for (let x = b.x - 1400; x < b.x + b.w + 1400; x += cell)
       for (let y = b.y - 1000; y < b.y + b.h + 1000; y += cell) {
-        if (rnd() > 0.6) continue;
+        if (rnd() > 0.3) continue;
         const px = x + rnd() * cell;
         const py = y + rnd() * cell;
         if (geo.hit(px, py, 80)) continue;
@@ -169,6 +173,8 @@ export class Background {
   private backdrop(out: Deco[], geo: Geometry, sheets: SheetDef[], s: number) {
     const { sw, sh, bounds: b } = geo;
     const k = geo.compact ? 0.65 : 1;
+    // shapes shrink with the screen, but their spacing barely does: same density as on desktop
+    const spread = Math.max(s * k, 0.85);
     const anchors = sheets.map((def) => ({ hue: def.hue, ...geo.get(def.id).anchor }));
     const nearestHue = (x: number, y: number) => {
       let best = anchors[0];
@@ -185,14 +191,14 @@ export class Background {
 
     // `opacity`: nearer planes are less transparent
     const layers = [
-      { d: 0.16, cell: 560, keep: 0.5, seed: 101, opacity: 0.85 },
-      { d: 0.32, cell: 420, keep: 0.55, seed: 202, opacity: 1.2 },
-      { d: 0.5, cell: 320, keep: 0.55, seed: 303, opacity: 1.6 },
+      { d: 0.16, cell: 560, keep: 0.1, seed: 101, opacity: 0.85 },
+      { d: 0.32, cell: 420, keep: 0.2, seed: 202, opacity: 1.2 },
+      { d: 0.5, cell: 320, keep: 0.22, seed: 303, opacity: 1.6 },
     ];
     for (const [li, L] of layers.entries()) {
       const rnd = rng(L.seed);
       const R = (a: number, c: number) => a + (c - a) * rnd();
-      const cell = L.cell * s * k;
+      const cell = L.cell * spread;
       // the camera only sweeps `bounds * d` of this plane, plus one screen around it
       const x0 = b.x * L.d - sw * 1.5;
       const x1 = (b.x + b.w) * L.d + sw * 1.5;
@@ -294,19 +300,21 @@ export class Background {
 
     out.push({ home: def.id, x: cx, y: cy, w: R(340, 480) * s * k, h: 0, d: 0.7, kind: Kind.Glow, hue: def.hue, alpha: 0.14, ax: 6, ay: 6, phase: R(0, 6.28), speed: 0.12, ix, iy });
     // soft, large pieces may run under the content
-    add(R(-90, -20), R(-110, -30), R(240, 360), R(260, 400), 0.78, Kind.Gradient, def.hue, R(0.22, 0.3), 0.6);
-    add(R(20, 70), R(30, 90), R(150, 240), R(110, 190), 0.88, Kind.Stroke, null, 0.12, 0.8);
-    add(R(-30, 30), R(120, 200), R(70, 140), R(50, 90), 0.95, Kind.Fill, def.hue, 0.14);
+    add(R(-90, -20), R(-110, -30), R(240, 360), R(260, 400), 0.78, Kind.Gradient, def.hue, R(0.3, 0.4), 0.6);
+    add(R(20, 70), R(30, 90), R(150, 240), R(110, 190), 0.88, Kind.Stroke, null, 0.22, 0.8);
+    add(R(-30, 30), R(120, 200), R(70, 140), R(50, 90), 0.95, Kind.Fill, def.hue, 0.22);
     // crisp pieces stay in the margins
-    add(R(120, 260), R(10, 60), R(60, 110), R(40, 70), 1.0, Kind.Stroke, def.hue, 0.5, 1, true);
-    add(R(10, 50), R(150, 240), 64, 40, 1.06, Kind.Dots, null, 0.4, 1, true);
+    add(R(120, 260), R(10, 60), R(60, 110), R(40, 70), 1.0, Kind.Stroke, def.hue, 0.75, 1, true);
+    add(R(10, 50), R(150, 240), 64, 40, 1.06, Kind.Dots, null, 0.6, 1, true);
     const sq = R(16, 34);
     add(R(30, 160), R(30, 160), sq, sq, 1.18, Kind.Solid, def.hue, 0.95, 1, true);
-    for (let i = 0; i < 3; i++) {
+    // small specks: fewer on phones, where the cluster is squeezed into a much smaller area
+    const specks = compact ? 1 : 3;
+    for (let i = 0; i < specks; i++) {
       const sz = R(10, 22);
-      add(R(20, 280), R(20, 280), sz, sz, R(1.1, 1.3), Kind.Stroke, null, 0.3, 1.4, true);
+      add(R(20, 280), R(20, 280), sz, sz, R(1.1, 1.3), Kind.Stroke, null, 0.5, 1.4, true);
     }
-    for (let i = 0; i < 3; i++) add(R(20, 300), R(20, 300), 5, 5, R(1.15, 1.4), Kind.Solid, rnd() < 0.5 ? def.hue : null, 0.85, 1.6, true);
+    for (let i = 0; i < specks; i++) add(R(20, 300), R(20, 300), 5, 5, R(1.15, 1.4), Kind.Solid, rnd() < 0.5 ? def.hue : null, 0.85, 1.6, true);
   }
 
   /* ----------------------------------------------------------------- draw */
@@ -314,6 +322,8 @@ export class Background {
   draw(st: DrawState) {
     const { ctx, w, h, dpr } = this;
     const P = getPalette();
+    // on a light background, coloured washes read as stains: keep them much fainter
+    const wash = currentTheme() === 'light' ? 0.35 : 1;
     const { cam, geo } = st;
     const z = cam.z;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -329,7 +339,7 @@ export class Background {
 
     // networks sit behind every rectangle (they still move with their own depth)
     const netAlpha = fade * deepFade * NET_ALPHA;
-    if (netAlpha > 0.01) this.field.draw(ctx, w, h, cam, P, t, st.motion, netAlpha);
+    if (netAlpha > 0.01) this.field.draw(ctx, w, h, cam, P, t, netAlpha);
     for (const r of this.decos) {
       if (r.deep && deepFade < 0.01) continue;
       const d = r.deep ? r.d : 1 + (r.d - 1) * pf;
@@ -349,7 +359,8 @@ export class Background {
       const x = w / 2 + ox + (r.x + dx) * zE;
       const y = h / 2 + oy + (r.y + dy) * zE;
       const color = r.hue ? P.hues[r.hue] : P.deco;
-      const a = r.alpha * (0.8 + 0.2 * Math.sin(t * r.speed * 0.7 + r.phase * 2.3)) * fade * (r.deep ? deepFade * BACKDROP_ALPHA : 1);
+      const soft = r.hue && (r.kind === Kind.Glow || r.kind === Kind.Gradient || r.kind === Kind.Fill) ? wash : 1;
+      const a = r.alpha * soft * (0.8 + 0.2 * Math.sin(t * r.speed * 0.7 + r.phase * 2.3)) * fade * (r.deep ? deepFade * BACKDROP_ALPHA : 1);
       if (a < 0.004) continue;
 
       if (r.kind === Kind.Glow) {

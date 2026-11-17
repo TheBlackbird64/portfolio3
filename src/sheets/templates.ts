@@ -1,4 +1,4 @@
-import { about, projects, site, skills, type Compare } from '../content';
+import { about, site, skills, type Compare } from '../content';
 import { ARROW, pad } from '../core/util';
 import { diagramSvg } from './diagram';
 import { highlight } from './highlight';
@@ -21,21 +21,11 @@ const nameLine = (word: string, cls = '') =>
 /* ------------------------------------------------------------------ index */
 
 function indexSheet(def: SheetDef) {
-  const list = SHEETS.filter((s) => s.kind === 'project')
-    .map((s, i) => {
-      const p = projects[i];
-      return `
-      <li><a class="work__row" href="${s.path}" style="--accent: var(--${s.hue})">
-        <span class="work__num">${pad(s.num)}</span>
-        <span class="work__title">${s.title}</span>
-        <span class="work__kind">${p.kind}</span>
-        <span class="work__year">${p.year}</span>
-      </a></li>`;
-    })
-    .join('');
+  const picker = SHEETS.find((s) => s.kind === 'projects')!;
+  const contact = SHEETS.find((s) => s.kind === 'contact')!;
 
   return `
-  ${head(def, `${live(site.available)}<span data-clock>${site.city} — --:--</span>`)}
+  ${head(def)}
   <div class="index">
     <p class="kicker index__kicker" data-reveal>${site.role} · ${site.city}</p>
     <h1 class="hero-name" data-hero-name aria-label="${site.firstName} ${site.lastName}">
@@ -44,13 +34,19 @@ function indexSheet(def: SheetDef) {
     <div class="index__intro">
       <p class="lead" data-reveal="lines">${site.lead}</p>
       <div class="index__cta" data-reveal>
-        <a class="btn btn--accent" href="${SHEETS[1].path}">Voir les projets ${ARROW}</a>
+        <a class="btn btn--accent" href="${picker.path}">Voir les projets ${ARROW}</a>
       </div>
     </div>
-    <nav class="index__work" aria-label="Projets sélectionnés" data-reveal>
-      <div class="work__head">Projets sélectionnés</div>
-      <ol class="work">${list}</ol>
-    </nav>
+    <aside class="index__status" aria-label="Statut" data-reveal>
+      <div class="box__head"><span>Statut</span>${live(site.available)}</div>
+      <dl class="status">
+        <div><dt>Basé à</dt><dd data-clock>${site.city} — --:--</dd></div>
+        <div><dt>Spécialité</dt><dd>${site.speciality}</dd></div>
+        <div><dt>Recherche</dt><dd>${site.seeking}</dd></div>
+        <div><dt>Réponse</dt><dd>${site.replyTime}</dd></div>
+      </dl>
+      <div class="status__cta"><a class="btn" href="${contact.path}">Me contacter ${ARROW}</a></div>
+    </aside>
   </div>`;
 }
 
@@ -82,7 +78,9 @@ const section = (n: number, label: string, body: string, cls = '') => `
 
 function projectSheet(def: SheetDef) {
   const p = def.project!;
-  const next = SHEETS[def.num + 1];
+  const picker = SHEETS.find((s) => s.kind === 'projects')!;
+  const after = SHEETS[def.num + 1];
+  const next = after?.kind === 'project' ? after : SHEETS.find((s) => s.kind === 'contact')!;
 
   const metrics = p.metrics
     .map(
@@ -145,7 +143,55 @@ function projectSheet(def: SheetDef) {
   ${section(6, 'Rétrospective', `<p class="retro" data-reveal="lines">${p.retro}</p>`)}
 
   <div class="next" data-reveal>
+    <a class="btn" href="${picker.path}">Tous les projets</a>
     <a class="btn btn--accent" href="${next.path}" style="--accent: var(--${next.hue})">${next.kind === 'project' ? 'Projet suivant' : 'Ensuite'} : ${next.title} ${ARROW}</a>
+  </div>`;
+}
+
+/* --------------------------------------------------------------- projects */
+
+const OUTLINE = `<svg class="trace" aria-hidden="true"><rect x="0" y="0" width="100%" height="100%" pathLength="1"/></svg>`;
+
+/** One project per screen: scrolling swaps them under a sweeping band (see fx/picker.ts). */
+function projectsSheet(def: SheetDef) {
+  const items = SHEETS.filter((s) => s.kind === 'project');
+  const slides = items
+    .map((s, i) => {
+      const p = s.project!;
+      const m = p.metrics[0];
+      return `
+      <article class="slide${i === 0 ? ' is-active' : ''}" data-slide="${i}" data-hue="${s.hue}" style="--accent: var(--${s.hue})"${i ? ' aria-hidden="true" inert' : ''}>
+        <p class="kicker slide__kicker" data-redraw><span>${pad(i + 1)}</span>${p.kind}</p>
+        <h2 class="slide__title" data-redraw>${p.name}</h2>
+        <p class="slide__tagline" data-redraw>${p.tagline}</p>
+        <div class="slide__card" data-redraw="card">
+          <dl class="status">
+            <div><dt>Année</dt><dd>${p.year} · ${p.duration}</dd></div>
+            <div><dt>Rôle</dt><dd>${p.role}</dd></div>
+            <div><dt>Résultat</dt><dd><b>${fmtNum(m.value, m.decimals)}${m.suffix ?? ''}</b> ${m.label}</dd></div>
+            <div><dt>Stack</dt><dd>${p.stack.join(' · ')}</dd></div>
+          </dl>
+          <div class="status__cta"><a class="btn btn--accent" href="${s.path}">Voir le projet ${ARROW}</a></div>
+          ${OUTLINE}
+        </div>
+      </article>`;
+    })
+    .join('');
+  const index = items
+    .map(
+      (s, i) =>
+        `<li><button type="button" data-pick="${i}" style="--accent: var(--${s.hue})"${i === 0 ? ' aria-current="true"' : ''}><span>${pad(i + 1)}</span>${s.title}</button></li>`,
+    )
+    .join('');
+
+  return `
+  ${head(def, `<span class="picker__hint">Défilez <span class="picker__hint-arrow" aria-hidden="true">↓</span></span><span data-picker-count>01 / ${pad(items.length)}</span>`)}
+  <div class="picker" data-picker>
+    <div class="picker__stage">${slides}</div>
+    <div class="picker__foot">
+      <ol class="picker__index" aria-label="Projets">${index}</ol>
+    </div>
+    <div class="picker__band" aria-hidden="true"></div>
   </div>`;
 }
 
@@ -248,14 +294,14 @@ function contactSheet(def: SheetDef) {
       <div class="contact__col" data-reveal>
         <div class="label">Disponibilité</div>
         <p class="avail">${live(site.available)}</p>
-        <p class="avail__meta"><span data-clock>${site.city} — --:--</span><br />Réponse sous 48 h</p>
+        <p class="avail__meta"><span data-clock>${site.city} — --:--</span><br />Réponse ${site.replyTime}</p>
         <a class="back" href="/"><span class="back__arrow">${ARROW}</span>Retour au début</a>
       </div>
     </div>
   </div>`;
 }
 
-const BUILDERS = { index: indexSheet, project: projectSheet, lab: labSheet, about: aboutSheet, contact: contactSheet };
+const BUILDERS = { index: indexSheet, projects: projectsSheet, project: projectSheet, lab: labSheet, about: aboutSheet, contact: contactSheet };
 
 export function buildSheet(def: SheetDef): HTMLElement {
   const el = document.createElement('section');

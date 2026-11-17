@@ -101,7 +101,7 @@ export function bindCopy(root: ParentNode) {
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /** Text boxes: the outline draws itself, holds, then erases, in a loop. */
-const LOOPED = '.logbox, .code, .sim, .skills, .portrait__frame';
+const LOOPED = '.index__status, .logbox, .code, .sim, .skills, .portrait__frame';
 /** Buttons: same animation, but only while hovered (or focused). */
 const ON_HOVER = '.btn';
 

@@ -13,6 +13,10 @@ export const site = {
   city: 'Paris',
   timezone: 'Europe/Paris',
   available: 'Disponible',
+  /** Ce que tu cherches (bloc « Statut » de l'accueil). */
+  seeking: 'CDI ou mission freelance',
+  /** Délai de réponse annoncé. */
+  replyTime: 'sous 48 h',
   email: 'bonjour@exemple.dev',
   lead: 'Développeur back-end. Je conçois des systèmes <em>qui tiennent la charge</em> — et, de temps en temps, des interfaces qui sortent du cadre.',
   links: [

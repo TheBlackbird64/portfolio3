@@ -25,6 +25,7 @@ Puis ouvrir http://127.0.0.1:5173
 | Composition des rectangles du fond | `src/render/background.ts` (`cluster()`) |
 | Réseaux du fond (densité, plans, intensité `NET_ALPHA`) | `src/render/network.ts` (`PLANES`, `PATCH`) |
 | Contour animé (boîtes de texte en boucle, boutons au survol) | `src/fx/details.ts` (`LOOPED`, `ON_HOVER`) ; rythme dans `src/styles/base.css` (`@keyframes trace`) |
+| Sélecteur de projets (bande qui balaie l'écran au scroll) : vitesse, épaisseur, inclinaison | `src/fx/picker.ts` (`SWEEP`, `BAND`, `SLANT`) |
 | Mise en page des feuilles | `src/sheets/templates.ts` + `src/styles/sheets.css` |
 
 ## Organisation du code
@@ -35,11 +36,11 @@ Puis ouvrir http://127.0.0.1:5173
 - `src/render/background.ts` — le fond : rectangles animés avec parallaxe, contours de la vue d'ensemble
 - `src/render/network.ts` — les réseaux (points et liens) répartis sur tout le fond, sur plusieurs plans
 - `src/sheets/` — gabarits HTML, schémas d'architecture SVG, coloration syntaxique
-- `src/fx/` — animations d'apparition, faux logs en direct, simulateur d'équilibreur de charge
+- `src/fx/` — animations d'apparition, faux logs en direct, simulateur d'équilibreur de charge, sélecteur de projets
 
 ## Raccourcis
 
-`← ↑ → ↓` aller vers la section voisine (ou défiler dans un projet) · `M` vue d'ensemble · `0`–`6` aller à une section · `Échap` quitter la vue d'ensemble · `Espace` / `Page ↓` défiler
+`← ↑ → ↓` aller vers la section voisine (ou défiler dans un projet ; sur « Projets », `↑ ↓` changent de projet et `← →` / `Entrée` ouvrent celui affiché) · `M` vue d'ensemble · `0`–`7` aller à une section · `Échap` quitter la vue d'ensemble · `Espace` / `Page ↓` défiler
 
 ## Mise en ligne
 

@@ -5,10 +5,11 @@ import { mapGlyph, NavArrows } from './core/nav';
 import { currentTheme, setTheme } from './core/theme';
 import { clamp, damp, easeInOutCubic, lerp, pad, qs, qsa, reducedMotion, zoomPath, type Cam } from './core/util';
 import { addTraces, bindCopy, LogStream, startClock } from './fx/details';
+import { Picker } from './fx/picker';
 import { reveal, revealHeroName } from './fx/reveal';
 import { LoadBalancerSim } from './fx/sim';
 import { Background } from './render/background';
-import { OVERVIEW_PATH, SHEETS, sheetFromPath, type SheetDef } from './sheets/registry';
+import { NAV_SHEETS, OVERVIEW_PATH, PROJECT_SHEETS, SHEETS, sheetFromPath, type Hue, type SheetDef } from './sheets/registry';
 import { buildSheet } from './sheets/templates';
 
 interface Sheet {
@@ -20,6 +21,7 @@ interface Sheet {
   svgs: SVGSVGElement[];
   logs?: LogStream;
   sim?: LoadBalancerSim;
+  picker?: Picker;
 }
 
 const ARROW_SM = `<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1.5 6h8M6.5 2.5 10 6l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>`;
@@ -40,7 +42,7 @@ function chromeHtml() {
       <span class="brand__mark" aria-hidden="true"></span>
       <span class="brand__name">${site.firstName} ${site.lastName}</span>
     </a>
-    <nav class="nav" aria-label="Sections">${SHEETS.map(link).join('')}</nav>
+    <nav class="nav" aria-label="Sections">${NAV_SHEETS.map(link).join('')}</nav>
     <div class="tools">
       <button type="button" class="tool tool--map" data-overview aria-label="Vue d’ensemble (M)" title="Vue d’ensemble (M)"><span class="tool__glyph"></span></button>
       <button type="button" class="tool" data-theme-toggle aria-label="Changer de thème" title="Changer de thème">${ICONS.theme}</button>
@@ -57,7 +59,7 @@ function chromeHtml() {
     <button type="button" class="pager__btn pager__btn--next" data-step="1"><span class="pager__label"></span><span class="pager__arrow">${ARROW_SM}</span></button>
   </nav>
   <div class="menu" hidden>
-    <ol class="menu__list">${SHEETS.map(menuLink).join('')}</ol>
+    <ol class="menu__list">${NAV_SHEETS.map(menuLink).join('')}</ol>
     <div class="menu__tools">
       <button type="button" class="btn btn--sm" data-overview>Vue d’ensemble</button>
       <button type="button" class="btn btn--sm" data-theme-toggle>Thème clair / sombre</button>
@@ -121,6 +123,12 @@ export class App {
       if (logs && def.project) sheet.logs = new LogStream(logs, def.project.logs);
       const sim = el.querySelector<HTMLElement>('[data-sim]');
       if (sim) sheet.sim = new LoadBalancerSim(sim);
+      const picker = el.querySelector<HTMLElement>('[data-picker]');
+      if (picker)
+        sheet.picker = new Picker(picker, (_i, hue) => {
+          el.style.setProperty('--accent', `var(--${hue})`);
+          if (this.current === sheet && !this.overview) this.setChromeHue(hue);
+        });
       this.sheets.push(sheet);
       this.byId.set(def.id, sheet);
     }
@@ -133,7 +141,7 @@ export class App {
     const initial = location.pathname === OVERVIEW_PATH ? undefined : sheetFromPath(location.pathname);
     this.current = this.byId.get(initial?.id ?? 'index')!;
     if (!initial && location.pathname !== OVERVIEW_PATH) history.replaceState({}, '', '/');
-    this.setChromeHue(this.current.def, false);
+    this.setChromeHue(this.hueOf(this.current), false);
 
     this.layout();
     this.bindEvents();
@@ -222,7 +230,7 @@ export class App {
     }
     this.world.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${z})`;
     this.world.style.opacity = this.bg.intro < 1 ? String(this.bg.intro) : '';
-    this.nav.update(this.cam, this.geo, this.current.def.id, !this.traveling && !this.overview);
+    this.nav.update(this.cam, this.geo, this.navId(this.current.def), !this.traveling && !this.overview);
 
     if (this.revealCheck && !this.traveling && !this.overview) {
       this.revealCheck = false;
@@ -241,6 +249,7 @@ export class App {
       this.scrollTarget = 0;
       return;
     }
+    if (target.picker && this.current.def.kind === 'project') target.picker.set(PROJECT_SHEETS.indexOf(this.current.def));
     this.flyTo(target);
   }
 
@@ -257,7 +266,7 @@ export class App {
     this.tween?.kill();
     this.traveling = true;
     this.root.classList.add('is-traveling');
-    this.setChromeHue(target.def);
+    this.setChromeHue(this.hueOf(target));
     this.setActive(target.def.id);
 
     const done = () => this.arrive(target);
@@ -333,7 +342,8 @@ export class App {
     s.logs?.start();
     s.sim?.start();
     s.svgs.forEach((svg) => svg.unpauseAnimations());
-    this.setChromeHue(s.def);
+    s.picker?.enter();
+    this.setChromeHue(this.hueOf(s));
     this.setActive(s.def.id);
     this.updatePager();
     document.title =
@@ -366,15 +376,26 @@ export class App {
   }
 
   /** The chrome takes the colour of the region the camera is heading to. */
-  private setChromeHue(def: SheetDef, animate = true) {
+  private setChromeHue(hue: Hue, animate = true) {
     for (const el of [this.bar, qs('.pager', this.root), qs('.menu', this.root)]) {
       el.classList.toggle('no-anim', !animate);
-      el.style.setProperty('--accent', `var(--${def.hue})`);
+      el.style.setProperty('--accent', `var(--${hue})`);
     }
   }
 
+  /** The selector takes the colour of the project it shows. */
+  private hueOf(s: Sheet): Hue {
+    return s.picker ? s.picker.hue : s.def.hue;
+  }
+
+  /** Project pages are not in the navigation: they light up « Projets » instead. */
+  private navId(def: SheetDef) {
+    return def.kind === 'project' ? SHEETS.find((s) => s.kind === 'projects')!.id : def.id;
+  }
+
   private setActive(id: string) {
-    qsa('[data-nav]', this.root).forEach((a) => a.classList.toggle('is-active', a.dataset.nav === id));
+    const nav = this.navId(this.byId.get(id)!.def);
+    qsa('[data-nav]', this.root).forEach((a) => a.classList.toggle('is-active', a.dataset.nav === nav));
     this.markGlyph();
   }
 
@@ -686,6 +707,13 @@ export class App {
       return;
     }
 
+    // project selector: vertical scrolling changes the project instead of moving the page
+    const picker = this.current.picker;
+    if (picker && Math.abs(dy) >= Math.abs(dx)) {
+      if (!picker.wheel(dy)) this.bump(dy * 0.08);
+      return;
+    }
+
     // horizontal trackpad swipe → neighbour on that side
     if (Math.abs(dx) > Math.abs(dy) * 1.5) {
       const now = performance.now();
@@ -737,13 +765,47 @@ export class App {
     const t = this.touch!;
     this.touch = null;
     const dx = e.clientX - t.x;
+    const dy = e.clientY - t.y;
     const g = this.geo.get(this.current.def.id);
+    const picker = this.current.picker;
+    if (picker && t.axis === 'y') {
+      if (Math.abs(dy) > 40 && !picker.step(dy < 0 ? 1 : -1)) this.bump(-Math.sign(dy) * 18);
+      return;
+    }
     if (t.axis === 'x' && Math.abs(dx) > 50) {
       const def = SHEETS[this.current.def.num + (dx < 0 ? 1 : -1)];
       if (def) this.go(def.id);
     } else if (t.axis === 'y' && g.maxScroll > 0) {
       this.scrollTarget = clamp(this.scrollTarget - t.vy * 320, 0, g.maxScroll);
     }
+  }
+
+  /**
+   * Keys on the selector: ↑ / ↓ (and page keys) change the project, Enter opens it, and
+   * ← / → open it too when its page lies on that side. Returns true when handled.
+   */
+  private pickerKey(e: KeyboardEvent, picker: Picker, interactive: boolean) {
+    const down = e.key === 'ArrowDown' || e.key === 'PageDown' || (e.key === ' ' && !interactive && !e.shiftKey);
+    const up = e.key === 'ArrowUp' || e.key === 'PageUp' || (e.key === ' ' && !interactive && e.shiftKey);
+    if (down || up) {
+      e.preventDefault();
+      if (!picker.step(down ? 1 : -1)) this.bump(down ? 18 : -18);
+      return true;
+    }
+    const project = PROJECT_SHEETS[picker.index];
+    if (e.key === 'Enter' && !interactive) {
+      this.go(project.id);
+      return true;
+    }
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const side = Math.sign(this.geo.get(project.id).anchor.x - this.cam.x);
+      if (side === (e.key === 'ArrowRight' ? 1 : -1)) {
+        e.preventDefault();
+        this.go(project.id);
+        return true;
+      }
+    }
+    return false;
   }
 
   private onKey(e: KeyboardEvent) {
@@ -764,6 +826,9 @@ export class App {
       return;
     }
     if (this.traveling) return;
+
+    const picker = this.current.picker;
+    if (picker && !this.overview && this.pickerKey(e, picker, interactive)) return;
 
     const dirs: Record<string, [number, number]> = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
     const dir = dirs[e.key];
